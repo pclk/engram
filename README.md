@@ -2,6 +2,19 @@
 
 > An engram is a unit of cognitive information imprinted in a physical substance, theorized to be the means by which memories are stored.
 
+Engram is a web-based text editor that is suited for studying, and the eventual translation into Anki flashcards. Power users often rely on local workflows (Obsidian, Neovim, Anki Desktop) to study effectively. However, when restricted to public computers or web-only environments, this workflow breaks. Existing web tools lack the speed of modal editing and the specific structure needed for creating high-quality flashcards.
+
+It has a focus on vim style modal editing, and it replicates the workflow I had on my macbook. I currently face a limitation to only access the web for studying, and I cannot use mac/linux terminals like my previous workflow.
+It runs entirely in the browser and uses your Google Drive as the storage component.
+- Topics: The notebook level (e.g., "Bluetooth Protocol").
+- Concepts: Atomic blocks of thought. Instead of writing a wall of text, you write about a specific mechanism (e.g., "Frequency Hopping").
+  - AI Integration: Feynman Technique: Asks you to explain the most complicated part of your concept.
+- Derivatives: Expand on concepts with:
+  - Probing Questions: Your questions that challenge your logic ("Why hop frequencies? Why not just use one band?").
+    - AI Integration:  Answers your question.
+  - Cloze Deletions: The final step to memorize the concept.
+    - AI Integration: Offers critique.
+
 Each “concept” can be attached with various derivatives. These derivatives include “Probing questions”, “Cloze”, 
 
 “Probing questions” represents questions that probe your understanding further. It aims to instil curiosity, engagement and innovation on the concept, things that make you think “hey yeah, this doesn’t really make sense from this perspective, why not do this instead?” For example in the bluetooth scenario, someone may ask “Why does bluetooth even need to hop around frequencies when they can just use a band? Wouldn’t it be much easier?” Frequently, these sorts of questions allow us to fill in gaps in our logic, and bring much more engagement into the material.
