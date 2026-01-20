@@ -655,6 +655,9 @@ const App = () => {
 
   return (
     <div className="flex flex-col h-screen overflow-hidden bg-[#1a1b26] text-[#c0caf5] font-sans">
+      <div style={{ background: 'red', color: 'white', padding: 8, fontWeight: 'bold', fontSize: 20 }}>
+        DEBUG: React app mounted
+      </div>
       {/* Top Bar */}
       <div className="p-4 border-b border-[#16161e] bg-[#16161e] flex justify-between items-center z-10 h-16">
         <div className="flex items-center gap-3">
