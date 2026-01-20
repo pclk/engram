@@ -295,6 +295,9 @@ const App = () => {
      if (foundIdx !== -1) {
          const target = items[foundIdx];
          setHState(prev => ({ ...prev, cursorIdx: target.cIdx, derivIdx: target.dIdx }));
+         // Update normal cursor to the start of the match if found
+         const matchIdx = target.text.toLowerCase().indexOf(q);
+         if (matchIdx !== -1) setNormalCursor(matchIdx);
      }
   };
 
@@ -336,6 +339,12 @@ const App = () => {
         e.preventDefault(); 
         const text = derivIdx === -1 ? currentConcept.text : (currentDeriv?.text || '');
         if (e.key === 'Escape') { setMode('BLOCK'); return; }
+        
+        // Search in Normal Mode
+        if (e.key === '/') { setIsSearching(true); setSearchQuery(''); return; }
+        if (e.key === 'n') { navigateSearch(lastSearchQuery, false); return; }
+        if (e.key === 'N') { navigateSearch(lastSearchQuery, true); return; }
+
         if (e.key === 'i') { setMode('INSERT'); return; }
         if (e.key === 'I') { setMode('INSERT'); setNormalCursor(0); return; }
         if (e.key === 'a') { setMode('INSERT'); setNormalCursor(prev => Math.min(prev + 1, text.length)); return; }
@@ -521,7 +530,7 @@ const App = () => {
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [mode, keyBuffer, hState, isSearching, selectionPending, lastSearchQuery, cursorIdx, derivIdx]);
+  }, [mode, keyBuffer, hState, isSearching, selectionPending, lastSearchQuery, cursorIdx, derivIdx, searchQuery]);
 
   useLayoutEffect(() => {
     if (activeRef.current) activeRef.current.scrollIntoView({ behavior: 'smooth', block: 'center' });
@@ -538,6 +547,11 @@ const App = () => {
     const sQuery = isSearching ? searchQuery : lastSearchQuery;
     const hasSearch = !!sQuery;
     
+    // Highlight colors
+    const matchClass = isFocused 
+        ? "bg-[#ff9e64] text-[#1a1b26]" // Focused: Dark Orange
+        : "bg-[#e0af68] text-[#1a1b26]"; // Unfocused: Yellow
+
     // Normal Mode (Character based with Cursor + Highlight)
     if (mode === 'NORMAL' && isFocused) {
         if (!text) return <span className="normal-focus w-2 h-5 inline-block align-middle"></span>;
@@ -558,7 +572,7 @@ const App = () => {
                 {chars.map((char, i) => {
                     const isMatch = ranges.some(r => i >= r.start && i < r.end);
                     let className = "";
-                    if (isMatch) className += "bg-[#e0af68] text-[#1a1b26] "; // Tokyo Yellow Highlight
+                    if (isMatch) className += matchClass + " ";
                     if (i === normalCursor) className += "char-cursor ";
                     
                     return <span key={i} className={className}>{char}</span>;
@@ -577,7 +591,7 @@ const App = () => {
              <span>
                  {parts.map((part, i) => (
                      part.toLowerCase() === sQuery.toLowerCase() 
-                     ? <span key={i} className="bg-[#e0af68] text-[#1a1b26]">{part}</span>
+                     ? <span key={i} className={matchClass}>{part}</span>
                      : <span key={i} className={!text && i===0 ? "opacity-30 italic" : ""}>{part || (text ? "" : "Empty...")}</span>
                  ))}
              </span>
@@ -615,7 +629,7 @@ const App = () => {
             <div className="flex gap-4">
                 <HintGroup label="Mode">Esc:Block</HintGroup>
                 <HintGroup label="Edit">i/a</HintGroup>
-                <HintGroup label="Nav">h/j/k/l w/b</HintGroup>
+                <HintGroup label="Nav">h/j/k/l w/b / n/N</HintGroup>
                 <HintGroup label="Ops">u:Undo r:Redo</HintGroup>
             </div>
         );
@@ -636,6 +650,8 @@ const App = () => {
     }
     return null;
   };
+
+  const isFocusMode = mode === 'NORMAL' || mode === 'INSERT';
 
   return (
     <div className="flex flex-col h-screen overflow-hidden bg-[#1a1b26] text-[#c0caf5] font-sans">
@@ -671,108 +687,115 @@ const App = () => {
       {/* Main Content */}
       <div className="flex-1 overflow-y-auto p-8 relative">
         <div className="max-w-3xl mx-auto pb-20 space-y-6">
-          {topic.concepts.map((concept, cIdx) => (
-             <div 
-               key={concept.id}
-               ref={cursorIdx === cIdx && derivIdx === -1 ? activeRef : null}
-               className={`p-4 rounded transition-all duration-100 relative
-                 border bg-[#24283b]
-                 ${cursorIdx === cIdx && derivIdx === -1 && mode === 'BLOCK' 
-                    ? 'border-[#7aa2f7] ring-1 ring-[#7aa2f7] shadow-[0_0_20px_rgba(122,162,247,0.1)]' 
-                    : 'border-[#7aa2f7]/20'}
-               `}
-             >
-                <div className="flex gap-4">
-                    <span className="mono text-xs opacity-50 mt-1.5 text-[#565f89]">{String(cIdx + 1).padStart(2, '0')}</span>
-                    <div className="flex-1 text-lg leading-relaxed relative font-mono">
-                        {mode === 'INSERT' && cursorIdx === cIdx && derivIdx === -1 && (
-                            <textarea
-                                ref={inputRef}
-                                value={concept.text}
-                                onChange={(e) => {
-                                    updateText(e.target.value);
-                                    setNormalCursor(e.target.selectionStart);
-                                }}
-                                onSelect={(e) => setNormalCursor(e.currentTarget.selectionStart)}
-                                className="absolute inset-0 w-full h-full bg-transparent text-transparent caret-[#ff9e64] outline-none resize-none overflow-hidden z-10 font-mono text-lg leading-relaxed"
-                                spellCheck={false}
-                            />
-                        )}
-                        <div className={`break-words whitespace-pre-wrap min-h-[1.5em] text-[#c0caf5]`}>
-                            {renderTextWithCursor(concept.text, cursorIdx === cIdx && derivIdx === -1)}
+          {topic.concepts.map((concept, cIdx) => {
+             const isConceptActive = cursorIdx === cIdx && derivIdx === -1;
+             const conceptOpacity = isFocusMode && !isConceptActive ? 'opacity-20 grayscale transition-all duration-300' : 'opacity-100 transition-all duration-300';
+             
+             return (
+                 <div 
+                   key={concept.id}
+                   ref={cursorIdx === cIdx && derivIdx === -1 ? activeRef : null}
+                   className={`p-4 rounded transition-all duration-100 relative
+                     border bg-[#24283b]
+                     ${cursorIdx === cIdx && derivIdx === -1 && mode === 'BLOCK' 
+                        ? 'border-[#7aa2f7] ring-1 ring-[#7aa2f7] shadow-[0_0_20px_rgba(122,162,247,0.1)]' 
+                        : 'border-[#7aa2f7]/20'}
+                   `}
+                 >
+                    <div className={`flex gap-4 ${conceptOpacity}`}>
+                        <span className="mono text-xs opacity-50 mt-1.5 text-[#565f89]">{String(cIdx + 1).padStart(2, '0')}</span>
+                        <div className="flex-1 text-lg leading-relaxed relative font-mono">
+                            {mode === 'INSERT' && cursorIdx === cIdx && derivIdx === -1 && (
+                                <textarea
+                                    ref={inputRef}
+                                    value={concept.text}
+                                    onChange={(e) => {
+                                        updateText(e.target.value);
+                                        setNormalCursor(e.target.selectionStart);
+                                    }}
+                                    onSelect={(e) => setNormalCursor(e.currentTarget.selectionStart)}
+                                    className="absolute inset-0 w-full h-full bg-transparent text-transparent caret-[#ff9e64] outline-none resize-none overflow-hidden z-10 font-mono text-lg leading-relaxed"
+                                    spellCheck={false}
+                                />
+                            )}
+                            <div className={`break-words whitespace-pre-wrap min-h-[1.5em] text-[#c0caf5]`}>
+                                {renderTextWithCursor(concept.text, cursorIdx === cIdx && derivIdx === -1)}
+                            </div>
                         </div>
                     </div>
-                </div>
 
-                {/* Derivatives Area */}
-                <div className="ml-10 mt-4 pl-4 border-l border-[#565f89]/30 space-y-3">
-                    {/* Render Derivatives */}
-                    {concept.derivatives.map((deriv, dIdx) => {
-                        const isCandidate = selectionPending && selectionPending.candidates.some(c => c.id === deriv.id) && selectionPending.candidates[0].type === deriv.type && cursorIdx === cIdx;
-                        const candidateIndex = isCandidate ? selectionPending.candidates.findIndex(c => c.id === deriv.id) + 1 : null;
-                        const isProbing = deriv.type === 'PROBING';
-                        
-                        // Tokyo Night Colors
-                        const borderColor = isProbing ? 'border-[#ff9e64]/30' : 'border-[#bb9af7]/30';
-                        const bgColor = isProbing ? 'bg-[#ff9e64]/10' : 'bg-[#bb9af7]/10';
-                        const focusRing = isProbing ? 'ring-[#ff9e64]' : 'ring-[#bb9af7]';
-                        const badgeBg = isProbing ? 'bg-[#ff9e64]/20' : 'bg-[#bb9af7]/20';
-                        const badgeText = isProbing ? 'text-[#ff9e64]' : 'text-[#bb9af7]';
+                    {/* Derivatives Area */}
+                    <div className="ml-10 mt-4 pl-4 border-l border-[#565f89]/30 space-y-3">
+                        {/* Render Derivatives */}
+                        {concept.derivatives.map((deriv, dIdx) => {
+                            const isCandidate = selectionPending && selectionPending.candidates.some(c => c.id === deriv.id) && selectionPending.candidates[0].type === deriv.type && cursorIdx === cIdx;
+                            const candidateIndex = isCandidate ? selectionPending.candidates.findIndex(c => c.id === deriv.id) + 1 : null;
+                            const isProbing = deriv.type === 'PROBING';
+                            const isDerivActive = cursorIdx === cIdx && derivIdx === dIdx;
+                            const derivOpacity = isFocusMode && !isDerivActive ? 'opacity-20 grayscale transition-all duration-300' : 'opacity-100 transition-all duration-300';
+                            
+                            // Tokyo Night Colors
+                            const borderColor = isProbing ? 'border-[#ff9e64]/30' : 'border-[#bb9af7]/30';
+                            const bgColor = isProbing ? 'bg-[#ff9e64]/10' : 'bg-[#bb9af7]/10';
+                            const focusRing = isProbing ? 'ring-[#ff9e64]' : 'ring-[#bb9af7]';
+                            const badgeBg = isProbing ? 'bg-[#ff9e64]/20' : 'bg-[#bb9af7]/20';
+                            const badgeText = isProbing ? 'text-[#ff9e64]' : 'text-[#bb9af7]';
 
-                        return (
-                            <div 
-                                key={deriv.id}
-                                ref={cursorIdx === cIdx && derivIdx === dIdx ? activeRef : null}
-                                className={`p-3 rounded relative transition-all duration-100 border ${borderColor} ${bgColor}
-                                    ${cursorIdx === cIdx && derivIdx === dIdx && mode === 'BLOCK' ? `ring-1 ${focusRing} shadow-[0_0_15px_rgba(0,0,0,0.3)]` : ''}
-                                `}
-                            >
-                                <div className="flex items-start gap-3">
-                                    <span className={`text-[9px] px-1.5 py-0.5 rounded uppercase font-bold tracking-wider mt-0.5 ${badgeBg} ${badgeText}`}>
-                                        {isProbing ? '?' : 'C'}
-                                    </span>
-                                    {isCandidate && (
-                                        <span className="bg-[#f7768e] text-[#1a1b26] text-[10px] font-bold px-1.5 rounded animate-bounce">
-                                            [{candidateIndex}]
+                            return (
+                                <div 
+                                    key={deriv.id}
+                                    ref={cursorIdx === cIdx && derivIdx === dIdx ? activeRef : null}
+                                    className={`p-3 rounded relative transition-all duration-100 border ${borderColor} ${bgColor} ${derivOpacity}
+                                        ${cursorIdx === cIdx && derivIdx === dIdx && mode === 'BLOCK' ? `ring-1 ${focusRing} shadow-[0_0_15px_rgba(0,0,0,0.3)]` : ''}
+                                    `}
+                                >
+                                    <div className="flex items-start gap-3">
+                                        <span className={`text-[9px] px-1.5 py-0.5 rounded uppercase font-bold tracking-wider mt-0.5 ${badgeBg} ${badgeText}`}>
+                                            {isProbing ? '?' : 'C'}
                                         </span>
-                                    )}
-                                    <div className="flex-1 text-sm opacity-90 relative font-mono">
-                                        {mode === 'INSERT' && cursorIdx === cIdx && derivIdx === dIdx && (
-                                            <textarea
-                                                ref={inputRef}
-                                                value={deriv.text}
-                                                onChange={(e) => {
-                                                    updateText(e.target.value);
-                                                    setNormalCursor(e.target.selectionStart);
-                                                }}
-                                                onSelect={(e) => setNormalCursor(e.currentTarget.selectionStart)}
-                                                className="absolute inset-0 w-full h-full bg-transparent text-transparent caret-[#ff9e64] outline-none resize-none overflow-hidden z-10 font-mono text-sm"
-                                                spellCheck={false}
-                                            />
+                                        {isCandidate && (
+                                            <span className="bg-[#f7768e] text-[#1a1b26] text-[10px] font-bold px-1.5 rounded animate-bounce">
+                                                [{candidateIndex}]
+                                            </span>
                                         )}
-                                        <div className={`break-words whitespace-pre-wrap min-h-[1.5em] text-[#a9b1d6]`}>
-                                            {renderTextWithCursor(deriv.text, cursorIdx === cIdx && derivIdx === dIdx)}
+                                        <div className="flex-1 text-sm opacity-90 relative font-mono">
+                                            {mode === 'INSERT' && cursorIdx === cIdx && derivIdx === dIdx && (
+                                                <textarea
+                                                    ref={inputRef}
+                                                    value={deriv.text}
+                                                    onChange={(e) => {
+                                                        updateText(e.target.value);
+                                                        setNormalCursor(e.target.selectionStart);
+                                                    }}
+                                                    onSelect={(e) => setNormalCursor(e.currentTarget.selectionStart)}
+                                                    className="absolute inset-0 w-full h-full bg-transparent text-transparent caret-[#ff9e64] outline-none resize-none overflow-hidden z-10 font-mono text-sm"
+                                                    spellCheck={false}
+                                                />
+                                            )}
+                                            <div className={`break-words whitespace-pre-wrap min-h-[1.5em] text-[#a9b1d6]`}>
+                                                {renderTextWithCursor(deriv.text, cursorIdx === cIdx && derivIdx === dIdx)}
+                                            </div>
                                         </div>
                                     </div>
                                 </div>
-                            </div>
-                        );
-                    })}
+                            );
+                        })}
 
-                    {/* Empty State / Ghost Block */}
-                    {concept.derivatives.length === 0 && (
-                        <div 
-                           ref={cursorIdx === cIdx && derivIdx === 0 ? activeRef : null}
-                           className={`p-3 rounded border border-dashed border-[#565f89]/30 text-xs font-mono text-[#565f89] flex items-center gap-2 transition-all
-                           ${cursorIdx === cIdx && derivIdx === 0 ? 'ring-1 ring-[#565f89] bg-[#565f89]/10 text-[#c0caf5]' : ''}`}
-                        >
-                            <span>No derivatives.</span>
-                            {cursorIdx === cIdx && derivIdx === 0 && <span className="text-[#ff9e64] font-bold">Press 'o' to add.</span>}
-                        </div>
-                    )}
-                </div>
-             </div>
-          ))}
+                        {/* Empty State / Ghost Block */}
+                        {concept.derivatives.length === 0 && (
+                            <div 
+                               ref={cursorIdx === cIdx && derivIdx === 0 ? activeRef : null}
+                               className={`p-3 rounded border border-dashed border-[#565f89]/30 text-xs font-mono text-[#565f89] flex items-center gap-2 transition-all
+                               ${cursorIdx === cIdx && derivIdx === 0 ? 'ring-1 ring-[#565f89] bg-[#565f89]/10 text-[#c0caf5]' : ''}`}
+                            >
+                                <span>No derivatives.</span>
+                                {cursorIdx === cIdx && derivIdx === 0 && <span className="text-[#ff9e64] font-bold">Press 'o' to add.</span>}
+                            </div>
+                        )}
+                    </div>
+                 </div>
+             );
+          })}
         </div>
       </div>
 
