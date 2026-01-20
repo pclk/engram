@@ -1,0 +1,5 @@
+{
+  "name": "Engram",
+  "description": "A modal-based study editor and Anki flashcard factory powered by Gemini.",
+  "requestFramePermissions": []
+}
