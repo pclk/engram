@@ -224,6 +224,51 @@ export async function run({ page, baseUrl }) {
 	await page.keyboard.press('Escape');
 	await waitForNoText(page, 'CHORD:');
 
+	await page.keyboard.press('Escape');
+	await page.keyboard.press('Escape');
+	await page.keyboard.press('l');
+	await page.keyboard.press('o');
+	await page.keyboard.press('e');
+	await page.waitForSelector('textarea');
+	await page.type('textarea', 'Line1\nLine2\nLine3\nLine4');
+	const elaborationValue = await page.$eval('textarea', el => el.value ?? '');
+	if (!elaborationValue.includes('Line4')) {
+		throw new Error('Expected elaboration textarea to include Line4.');
+	}
+	await page.keyboard.press('Escape');
+	await page.keyboard.press('Escape');
+	await page.keyboard.press('h');
+	await page.waitForSelector('[data-derivative-type="ELABORATION"] [data-testid^="derivative-text-"]');
+
+	const getElaborationMetrics = async () => page.$eval('[data-derivative-type="ELABORATION"] [data-testid^="derivative-text-"]', el => ({
+		text: el.textContent ?? '',
+		scrollHeight: el.scrollHeight,
+		clientHeight: el.clientHeight
+	}));
+
+	const focusedMetrics = await getElaborationMetrics();
+	if (!focusedMetrics.text.includes('Line4')) {
+		throw new Error('Expected elaboration to include Line4 before moving away.');
+	}
+
+	await page.keyboard.press('o');
+	await page.keyboard.type('Second concept');
+	await page.keyboard.press('Escape');
+	await page.keyboard.press('Escape');
+	await waitForText(page, 'BLOCK - CONCEPT');
+	const trimmedMetrics = await getElaborationMetrics();
+	if (trimmedMetrics.scrollHeight <= trimmedMetrics.clientHeight) {
+		throw new Error('Expected elaboration to clamp to 3 lines when not focused.');
+	}
+	await page.keyboard.press('k');
+	const fullMetrics = await getElaborationMetrics();
+	if (!fullMetrics.text.includes('Line4')) {
+		throw new Error('Expected elaboration to show full text when concept is focused.');
+	}
+	if (fullMetrics.scrollHeight > fullMetrics.clientHeight) {
+		throw new Error('Expected elaboration to be unclamped when concept is focused.');
+	}
+
 	await page.keyboard.press('/');
 	await page.waitForSelector('input[placeholder="Search..."]', { timeout: 10000 });
 	await page.keyboard.press('Escape');
@@ -231,6 +276,22 @@ export async function run({ page, baseUrl }) {
 
 	await page.keyboard.press('Escape');
 	await waitForText(page, 'BLOCK - CONCEPT');
+
+	await page.keyboard.press('h');
+	await page.keyboard.press('i');
+	await page.keyboard.press('i');
+	await page.waitForSelector('textarea');
+	const longString = 'e'.repeat(200);
+	await page.$eval('textarea', (el, value) => {
+		el.value = value;
+		el.dispatchEvent(new Event('input', { bubbles: true }));
+	}, longString);
+	await page.keyboard.press('Escape');
+	const overflowed = await page.$eval('[data-testid="concept-text-0"]', el => el.scrollWidth > el.clientWidth);
+	if (overflowed) {
+		throw new Error('Expected long unbroken text to wrap within the concept box.');
+	}
+
 	const durationMs = Date.now() - startTime;
 	console.log(`E2E Spec: ${label} - pass (${durationMs}ms)`);
 }

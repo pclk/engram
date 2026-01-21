@@ -17,7 +17,7 @@ const loadAi = async () => {
 };
 
 type Mode = 'BLOCK' | 'NORMAL' | 'INSERT';
-type DerivativeType = 'PROBING' | 'CLOZE';
+type DerivativeType = 'PROBING' | 'CLOZE' | 'ELABORATION';
 type YankedItem =
 	| { kind: 'concept'; concept: Concept }
 	| { kind: 'derivative'; derivative: Derivative };
@@ -75,9 +75,14 @@ const createEmptyTopic = (title = 'Untitled Topic'): Topic => ({
 });
 
 function sortDerivatives(derivatives: Derivative[]): Derivative[] {
+	const order: Record<DerivativeType, number> = {
+		PROBING: 0,
+		CLOZE: 1,
+		ELABORATION: 2
+	};
 	return [...derivatives].sort((a, b) => {
 		if (a.type === b.type) return 0;
-		return a.type === 'PROBING' ? -1 : 1;
+		return order[a.type] - order[b.type];
 	});
 }
 
@@ -140,6 +145,12 @@ const findEndWord = (text: string, idx: number) => {
 	}
 	while (i < text.length - 1 && isWordChar(text[i + 1])) i++;
 	return i;
+};
+
+const trimLines = (text: string, maxLines: number) => {
+	const lines = text.split('\n');
+	if (lines.length <= maxLines) return text;
+	return lines.slice(0, maxLines).join('\n') + '…';
 };
 
 function useUndo(initialState: HistoryState) {
@@ -1007,6 +1018,14 @@ const App = () => {
 							const newIdx = concept.derivatives.findIndex(d => d.id === newId);
 							updateTopic(newTopic, cursorIdx, newIdx);
 							setMode('INSERT');
+						} else if (e.key === 'e') {
+							const newId = generateId();
+							const newTopic = { ...topic, concepts: [...topic.concepts] };
+							const concept = newTopic.concepts[cursorIdx];
+							concept.derivatives = sortDerivatives([...concept.derivatives, { id: newId, type: 'ELABORATION', text: '' }]);
+							const newIdx = concept.derivatives.findIndex(d => d.id === newId);
+							updateTopic(newTopic, cursorIdx, newIdx);
+							setMode('INSERT');
 						}
 						setKeyBuffer('');
 						return;
@@ -1045,6 +1064,17 @@ const App = () => {
 								setKeyBuffer('');
 							} else if (clozes.length > 1) {
 								setSelectionPending({ action: 'DELETE', type: 'CLOZE', candidates: clozes });
+							} else { setKeyBuffer(''); }
+						} else if (e.key === 'e') {
+							const elaborations = currentConcept.derivatives.filter(d => d.type === 'ELABORATION');
+							if (elaborations.length === 1) {
+								const targetId = elaborations[0].id;
+								const newTopic = { ...topic, concepts: [...topic.concepts] };
+								newTopic.concepts[cursorIdx].derivatives = newTopic.concepts[cursorIdx].derivatives.filter(d => d.id !== targetId);
+								updateTopic(newTopic);
+								setKeyBuffer('');
+							} else if (elaborations.length > 1) {
+								setSelectionPending({ action: 'DELETE', type: 'ELABORATION', candidates: elaborations });
 							} else { setKeyBuffer(''); }
 						}
 						return;
@@ -1088,6 +1118,21 @@ const App = () => {
 								setKeyBuffer('');
 							} else if (clozes.length > 1) {
 								setSelectionPending({ action: 'CHANGE', type: 'CLOZE', candidates: clozes });
+							} else { setKeyBuffer(''); }
+						} else if (e.key === 'e') {
+							const elaborations = currentConcept.derivatives.filter(d => d.type === 'ELABORATION');
+							if (elaborations.length === 1) {
+								const targetId = elaborations[0].id;
+								const realIdx = currentConcept.derivatives.findIndex(d => d.id === targetId);
+								const newTopic = { ...topic, concepts: [...topic.concepts] };
+								newTopic.concepts[cursorIdx].derivatives[realIdx].text = '';
+								updateTopic(newTopic, cursorIdx, realIdx);
+								setMode('INSERT');
+								setNormalCursor(0);
+								insertSkipCommitRef.current = true;
+								setKeyBuffer('');
+							} else if (elaborations.length > 1) {
+								setSelectionPending({ action: 'CHANGE', type: 'ELABORATION', candidates: elaborations });
 							} else { setKeyBuffer(''); }
 						}
 						return;
@@ -1276,6 +1321,29 @@ const App = () => {
 			? "bg-[#ff9e64] text-[#1a1b26]"
 			: "bg-[#e0af68] text-[#1a1b26]";
 
+		if (mode === 'INSERT') {
+			if (hasSearch && sQuery) {
+				const regex = new RegExp(`(${sQuery.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi');
+				const parts = text.split(regex);
+				return (
+					<span>
+						{parts.map((part, i) => (
+							part.toLowerCase() === sQuery.toLowerCase()
+								? <span key={i} className={matchClass}>{part}</span>
+								: <span key={i} className={!text && i === 0 ? "opacity-30 italic" : ""}>{part || (text ? "" : "Empty...")}</span>
+						))}
+						{text.endsWith('\n') && <span className="block">&nbsp;</span>}
+					</span>
+				);
+			}
+			return (
+				<span className={!text ? "opacity-30 italic" : ""}>
+					{text || "Empty..."}
+					{text.endsWith('\n') && <span className="block">&nbsp;</span>}
+				</span>
+			);
+		}
+
 		if (mode === 'NORMAL' && isFocused) {
 			if (!text) return <span className="char-cursor">&nbsp;</span>;
 
@@ -1441,6 +1509,7 @@ const App = () => {
 				<div className="flex flex-col gap-2">
 					<LegendItem keys="o p" description="Add a new probing question" />
 					<LegendItem keys="o c" description="Add a new cloze deletion" />
+					<LegendItem keys="o e" description="Add an elaboration" />
 					<LegendItem keys="Esc" description="Cancel add chord" />
 				</div>
 			);
@@ -1561,6 +1630,7 @@ const App = () => {
 										)}
 										<div
 											className="break-words whitespace-pre-wrap min-h-[1.5em] text-[#c0caf5]"
+											style={{ overflowWrap: 'anywhere', wordBreak: 'break-word' }}
 											data-testid={`concept-text-${cIdx}`}
 										>
 												{renderTextWithCursor(concept.text, cursorIdx === cIdx && derivIdx === -1, { cursorIdx: cIdx, derivIdx: -1 })}
@@ -1573,20 +1643,42 @@ const App = () => {
 										const isCandidate = selectionPending && selectionPending.candidates.some(c => c.id === deriv.id) && selectionPending.candidates[0].type === deriv.type && cursorIdx === cIdx;
 										const candidateIndex = isCandidate ? selectionPending.candidates.findIndex(c => c.id === deriv.id) + 1 : null;
 										const isProbing = deriv.type === 'PROBING';
+										const isElaboration = deriv.type === 'ELABORATION';
 										const isDerivActive = cursorIdx === cIdx && derivIdx === dIdx;
 										const derivOpacity = isFocusMode && !isDerivActive ? 'opacity-20 grayscale transition-all duration-300' : 'opacity-100 transition-all duration-300';
 										const isDerivSelected = isBlockSelected(cIdx, dIdx);
 
-										const borderColor = isProbing ? 'border-[#ff9e64]/30' : 'border-[#bb9af7]/30';
-										const bgColor = isProbing ? 'bg-[#ff9e64]/10' : 'bg-[#bb9af7]/10';
-										const focusRing = isProbing ? 'ring-[#ff9e64]' : 'ring-[#bb9af7]';
-										const badgeBg = isProbing ? 'bg-[#ff9e64]/20' : 'bg-[#bb9af7]/20';
-										const badgeText = isProbing ? 'text-[#ff9e64]' : 'text-[#bb9af7]';
+										const borderColor = isProbing
+											? 'border-[#ff9e64]/30'
+											: isElaboration
+												? 'border-[#7dcfff]/30'
+												: 'border-[#bb9af7]/30';
+										const bgColor = isProbing
+											? 'bg-[#ff9e64]/10'
+											: isElaboration
+												? 'bg-[#7dcfff]/10'
+												: 'bg-[#bb9af7]/10';
+										const focusRing = isProbing
+											? 'ring-[#ff9e64]'
+											: isElaboration
+												? 'ring-[#7dcfff]'
+												: 'ring-[#bb9af7]';
+										const badgeBg = isProbing
+											? 'bg-[#ff9e64]/20'
+											: isElaboration
+												? 'bg-[#7dcfff]/20'
+												: 'bg-[#bb9af7]/20';
+										const badgeText = isProbing
+											? 'text-[#ff9e64]'
+											: isElaboration
+												? 'text-[#7dcfff]'
+												: 'text-[#bb9af7]';
 
 										return (
 											<div
 												key={deriv.id}
 												ref={cursorIdx === cIdx && derivIdx === dIdx ? activeRef : null}
+												data-derivative-type={deriv.type}
 												className={`p-3 rounded relative transition-all duration-100 border ${borderColor} ${bgColor} ${derivOpacity}
 																${cursorIdx === cIdx && derivIdx === dIdx && mode === 'BLOCK' ? `ring-1 ${focusRing} shadow-[0_0_15px_rgba(0,0,0,0.3)]` : ''}
 														${isDerivSelected ? 'ring-2 ring-[#bb9af7] border-[#bb9af7]/50 bg-[#2a1f3d]/35' : ''}
@@ -1594,7 +1686,7 @@ const App = () => {
 											>
 												<div className="flex items-start gap-3">
 													<span className={`text-[9px] px-1.5 py-0.5 rounded uppercase font-bold tracking-wider mt-0.5 ${badgeBg} ${badgeText}`}>
-														{isProbing ? '?' : 'C'}
+														{isProbing ? '?' : isElaboration ? 'E' : 'C'}
 													</span>
 													{isCandidate && (
 														<span className="bg-[#f7768e] text-[#1a1b26] text-[10px] font-bold px-1.5 rounded animate-bounce">
@@ -1615,8 +1707,23 @@ const App = () => {
 																spellCheck={false}
 															/>
 														)}
-														<div className="break-words whitespace-pre-wrap min-h-[1.5em] text-[#a9b1d6]">
-															{renderTextWithCursor(deriv.text, cursorIdx === cIdx && derivIdx === dIdx, { cursorIdx: cIdx, derivIdx: dIdx })}
+														<div
+															className="break-words whitespace-pre-wrap min-h-[1.5em] text-[#a9b1d6]"
+															style={{
+																overflowWrap: 'anywhere',
+																wordBreak: 'break-word',
+																overflow: isElaboration && mode === 'BLOCK' && cursorIdx !== cIdx ? 'hidden' : 'visible',
+																display: isElaboration && mode === 'BLOCK' && cursorIdx !== cIdx ? '-webkit-box' : 'block',
+																WebkitLineClamp: isElaboration && mode === 'BLOCK' && cursorIdx !== cIdx ? 3 : 'unset',
+																WebkitBoxOrient: isElaboration && mode === 'BLOCK' && cursorIdx !== cIdx ? 'vertical' : 'unset'
+															}}
+															data-testid={`derivative-text-${cIdx}-${dIdx}`}
+														>
+															{renderTextWithCursor(
+																deriv.text,
+																cursorIdx === cIdx && derivIdx === dIdx,
+																{ cursorIdx: cIdx, derivIdx: dIdx }
+															)}
 														</div>
 													</div>
 												</div>
