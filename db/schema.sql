@@ -11,8 +11,8 @@ CREATE TABLE IF NOT EXISTS app_users (
 	created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
--- Engram documents: each document stores a topic tree in JSONB
-CREATE TABLE IF NOT EXISTS engram_documents (
+-- Engram topics: each topic stores a topic tree in JSONB
+CREATE TABLE IF NOT EXISTS engram_topics (
 	id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
 	owner_id UUID NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
 	title TEXT NOT NULL,
@@ -21,8 +21,8 @@ CREATE TABLE IF NOT EXISTS engram_documents (
 	updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-CREATE INDEX IF NOT EXISTS engram_documents_owner_id_idx ON engram_documents(owner_id);
-CREATE INDEX IF NOT EXISTS engram_documents_topic_gin_idx ON engram_documents USING GIN (topic jsonb_path_ops);
+CREATE INDEX IF NOT EXISTS engram_topics_owner_id_idx ON engram_topics(owner_id);
+CREATE INDEX IF NOT EXISTS engram_topics_topic_gin_idx ON engram_topics USING GIN (topic jsonb_path_ops);
 
 -- Updated-at trigger
 CREATE OR REPLACE FUNCTION set_updated_at()
@@ -33,14 +33,14 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
-DROP TRIGGER IF EXISTS engram_documents_updated_at ON engram_documents;
-CREATE TRIGGER engram_documents_updated_at
-BEFORE UPDATE ON engram_documents
+DROP TRIGGER IF EXISTS engram_topics_updated_at ON engram_topics;
+CREATE TRIGGER engram_topics_updated_at
+BEFORE UPDATE ON engram_topics
 FOR EACH ROW
 EXECUTE FUNCTION set_updated_at();
 
 -- Optional: Row-level security example (enable once auth context is defined)
--- ALTER TABLE engram_documents ENABLE ROW LEVEL SECURITY;
--- CREATE POLICY engram_documents_owner_policy
--- ON engram_documents
+-- ALTER TABLE engram_topics ENABLE ROW LEVEL SECURITY;
+-- CREATE POLICY engram_topics_owner_policy
+-- ON engram_topics
 -- USING (owner_id::text = current_setting('app.user_id', true));

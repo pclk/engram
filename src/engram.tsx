@@ -68,6 +68,12 @@ const INITIAL_TOPIC: Topic = {
 	]
 };
 
+const createEmptyTopic = (title = 'Untitled Topic'): Topic => ({
+	id: generateId(),
+	title,
+	concepts: [{ id: generateId(), text: '', derivatives: [] }]
+});
+
 function sortDerivatives(derivatives: Derivative[]): Derivative[] {
 	return [...derivatives].sort((a, b) => {
 		if (a.type === b.type) return 0;
@@ -167,7 +173,19 @@ function useUndo(initialState: HistoryState) {
 		return next;
 	};
 
-	return { state: present, setState: setPresent, pushState, undo, redo };
+	const commitFrom = (baseState: HistoryState, newState: HistoryState) => {
+		setPast(prev => [...prev, baseState]);
+		setPresent(newState);
+		setFuture([]);
+	};
+
+	const reset = (newState: HistoryState) => {
+		setPast([]);
+		setPresent(newState);
+		setFuture([]);
+	};
+
+	return { state: present, setState: setPresent, pushState, undo, redo, commitFrom, reset };
 }
 
 // --- Components ---
@@ -193,7 +211,10 @@ const LegendItem = ({ keys, description }: { keys: string; description: string }
 // --- Main App ---
 
 const App = () => {
-	const { state: hState, setState: setHState, pushState, undo, redo } = useUndo({
+	const [topics, setTopics] = useState<Topic[]>([INITIAL_TOPIC]);
+	const [activeTopicId, setActiveTopicId] = useState(INITIAL_TOPIC.id);
+
+	const { state: hState, setState: setHState, pushState, undo, redo, commitFrom, reset: resetHistory } = useUndo({
 		topic: INITIAL_TOPIC,
 		cursorIdx: 0,
 		derivIdx: -1
@@ -211,9 +232,12 @@ const App = () => {
 	const normalDeletePendingRef = useRef(false);
 	const [normalChangePending, setNormalChangePending] = useState(false);
 	const normalChangePendingRef = useRef(false);
+	const [normalYankPending, setNormalYankPending] = useState(false);
+	const normalYankPendingRef = useRef(false);
 	const [insertDirty, setInsertDirty] = useState(false);
 	const insertDirtyRef = useRef(false);
 	const insertSkipCommitRef = useRef(false);
+	const insertBaseStateRef = useRef<HistoryState | null>(null);
 	const [searchQuery, setSearchQuery] = useState('');
 	const [lastSearchQuery, setLastSearchQuery] = useState('');
 	const [isSearching, setIsSearching] = useState(false);
@@ -248,11 +272,75 @@ const App = () => {
 		type: DerivativeType,
 		candidates: Derivative[]
 	} | null>(null);
+	const [topicDrafts, setTopicDrafts] = useState<Record<string, string>>({
+		[INITIAL_TOPIC.id]: INITIAL_TOPIC.title
+	});
+	const [topicMenuIndex, setTopicMenuIndex] = useState(0);
+	const topicMenuIndexRef = useRef(0);
+	const [topicMenuEditingId, setTopicMenuEditingId] = useState<string | null>(null);
 
 	const currentConcept = topic.concepts[cursorIdx];
 	const currentDeriv = (derivIdx >= 0 && currentConcept && currentConcept.derivatives.length > derivIdx)
 		? currentConcept.derivatives[derivIdx]
 		: null;
+
+	const syncTopicDraft = (id: string, title: string) => {
+		setTopicDrafts(prev => ({ ...prev, [id]: title }));
+	};
+
+	const openTopic = (id: string) => {
+		const target = topics.find(item => item.id === id);
+		if (!target) return;
+		const draftTitle = topicDrafts[id] ?? target.title;
+		const resolvedTopic = draftTitle === target.title ? target : { ...target, title: draftTitle };
+		setTopics(prev => prev.map(item => (item.id === id ? resolvedTopic : item)));
+		setActiveTopicId(id);
+		syncTopicDraft(id, resolvedTopic.title);
+		resetHistory({ topic: resolvedTopic, cursorIdx: 0, derivIdx: -1 });
+		setTopicMenuEditingId(null);
+		setIsDocumentSwitcherOpen(false);
+	};
+
+	const createTopic = () => {
+		const newTopic = createEmptyTopic();
+		setTopics(prev => [...prev, newTopic]);
+		setActiveTopicId(newTopic.id);
+		syncTopicDraft(newTopic.id, newTopic.title);
+		resetHistory({ topic: newTopic, cursorIdx: 0, derivIdx: -1 });
+		setTopicMenuIndex(Math.max(0, topics.length));
+		setTopicMenuEditingId(newTopic.id);
+	};
+
+	const renameTopic = (id: string, title: string) => {
+		syncTopicDraft(id, title);
+		setTopics(prev => prev.map(item => (item.id === id ? { ...item, title } : item)));
+		if (id === activeTopicId) {
+			setHState(prev => ({ ...prev, topic: { ...prev.topic, title } }));
+		}
+	};
+
+	const deleteTopic = (id: string) => {
+		setTopics(prev => {
+			const filtered = prev.filter(item => item.id !== id);
+			const nextTopics = filtered.length ? filtered : [createEmptyTopic()];
+			const nextActive = id === activeTopicId
+				? nextTopics[0]
+				: (nextTopics.find(item => item.id === activeTopicId) || nextTopics[0]);
+			if (nextActive.id !== activeTopicId) {
+				setActiveTopicId(nextActive.id);
+				syncTopicDraft(nextActive.id, nextActive.title);
+				resetHistory({ topic: nextActive, cursorIdx: 0, derivIdx: -1 });
+			}
+			setTopicMenuIndex(prevIndex => Math.min(prevIndex, Math.max(0, nextTopics.length - 1)));
+			return nextTopics;
+		});
+		setTopicDrafts(prev => {
+			const next = { ...prev };
+			delete next[id];
+			return next;
+		});
+		setTopicMenuEditingId(prev => (prev === id ? null : prev));
+	};
 
 	const activeRef = useRef<HTMLDivElement>(null);
 	const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -369,12 +457,17 @@ const App = () => {
 		return { text: deleteRange(text, start, end), cursor: start };
 	};
 
+	const applyTextChange = (text: string) => {
+		const newTopic = buildTopicWithText(text);
+		pushState({ topic: newTopic, cursorIdx, derivIdx });
+	};
+
 	const pasteYanked = () => {
 		if (mode === 'NORMAL' && yankText && currentConcept) {
 			const baseText = derivIdx === -1 ? currentConcept.text : (currentDeriv?.text || '');
 			const insertAt = Math.max(0, Math.min(baseText.length, normalCursorRef.current));
 			const newText = baseText.slice(0, insertAt) + yankText + baseText.slice(insertAt);
-			updateText(newText);
+			applyTextChange(newText);
 			setCursor(insertAt + yankText.length);
 			return;
 		}
@@ -440,7 +533,14 @@ const App = () => {
 		return newTopic;
 	};
 
-	const commitToHistory = () => pushState(hStateRef.current);
+	const commitToHistory = () => {
+		if (insertBaseStateRef.current) {
+			commitFrom(insertBaseStateRef.current, hStateRef.current);
+			insertBaseStateRef.current = null;
+			return;
+		}
+		pushState(hStateRef.current);
+	};
 
 	const handleAnkify = () => {
 		setAnkifyStatus('SUCCESS');
@@ -571,9 +671,64 @@ const App = () => {
 	useEffect(() => {
 		const handleKeyDown = (e: KeyboardEvent) => {
 			if (e.ctrlKey && (e.key === 'r' || e.key === 'R')) return;
+			const target = e.target as HTMLElement | null;
+			const isTextInput = !!target && (
+				target.tagName === 'INPUT' ||
+				target.tagName === 'TEXTAREA' ||
+				target.isContentEditable
+			);
 			if (isDocumentSwitcherOpen) {
-				e.preventDefault();
-				if (e.key === 'Escape') setIsDocumentSwitcherOpen(false);
+				if (!isTextInput) {
+					e.preventDefault();
+					if (e.key === 'Escape') {
+						setIsDocumentSwitcherOpen(false);
+						setTopicMenuEditingId(null);
+						return;
+					}
+					if (e.key === 'j') {
+						const nextIndex = Math.min(topicMenuIndexRef.current + 1, Math.max(0, topics.length - 1));
+						topicMenuIndexRef.current = nextIndex;
+						setTopicMenuIndex(nextIndex);
+						return;
+					}
+					if (e.key === 'k') {
+						const nextIndex = Math.max(0, topicMenuIndexRef.current - 1);
+						topicMenuIndexRef.current = nextIndex;
+						setTopicMenuIndex(nextIndex);
+						return;
+					}
+					if (e.key === 'o') {
+						createTopic();
+						return;
+					}
+					if (e.key === 'd') {
+						const target = topics[topicMenuIndexRef.current];
+						if (target) deleteTopic(target.id);
+						return;
+					}
+					if (e.key === 'c') {
+						const target = topics[topicMenuIndexRef.current];
+						if (target) setTopicMenuEditingId(target.id);
+						return;
+					}
+					if (e.key === 'Enter' || e.key === 'l') {
+						const target = topics[topicMenuIndexRef.current];
+						if (target) openTopic(target.id);
+						return;
+					}
+					return;
+				}
+				if (e.key === 'Escape') {
+					e.preventDefault();
+					setTopicMenuEditingId(null);
+					return;
+				}
+				if (e.key === 'Enter') {
+					e.preventDefault();
+					const targetId = topicMenuEditingId;
+					if (targetId) openTopic(targetId);
+					return;
+				}
 				return;
 			}
 
@@ -607,6 +762,7 @@ const App = () => {
 					insertSkipCommitRef.current = false;
 					insertDirtyRef.current = false;
 					setInsertDirty(false);
+					insertBaseStateRef.current = null;
 					setCursor(Math.max(0, normalCursorRef.current));
 				}
 				return;
@@ -618,9 +774,32 @@ const App = () => {
 				if (e.key === 'Escape') {
 					if (visualAnchor) { setVisualAnchor(null); return; }
 					if (keyBuffer === ' ') { setKeyBuffer(''); return; }
+					if (normalYankPendingRef.current) { normalYankPendingRef.current = false; setNormalYankPending(false); return; }
 					if (normalDeletePendingRef.current) { normalDeletePendingRef.current = false; setNormalDeletePending(false); return; }
 					if (normalChangePendingRef.current) { normalChangePendingRef.current = false; setNormalChangePending(false); return; }
 					setMode('BLOCK');
+					return;
+				}
+				if (normalYankPendingRef.current) {
+					const cursorPos = normalCursorRef.current;
+					if (e.key === 'w') {
+						const end = findNextWord(text, cursorPos);
+						setYankText(text.slice(cursorPos, end));
+						setYankBuffer(null);
+					} else if (e.key === 'e') {
+						const end = Math.min(text.length, findEndWord(text, cursorPos) + 1);
+						setYankText(text.slice(cursorPos, end));
+						setYankBuffer(null);
+					} else if (e.key === 'b') {
+						const start = findPrevWord(text, cursorPos);
+						setYankText(text.slice(start, cursorPos));
+						setYankBuffer(null);
+					} else if (e.key === 'y') {
+						setYankText(text);
+						setYankBuffer(null);
+					}
+					normalYankPendingRef.current = false;
+					setNormalYankPending(false);
 					return;
 				}
 				if (normalDeletePendingRef.current) {
@@ -712,11 +891,16 @@ const App = () => {
 				if (keyBuffer === ' ') {
 					if (e.key === 'f') { setKeyBuffer(''); handleAnkify(); return; }
 					if (e.key === 'g') { setKeyBuffer(''); handleGenerate(); return; }
-					if (e.key === 'a') { setKeyBuffer(''); setIsDocumentSwitcherOpen(true); return; }
+					if (e.key === 'a') { setKeyBuffer(''); setTopicMenuEditingId(null); setIsDocumentSwitcherOpen(true); return; }
 					setKeyBuffer('');
 					return;
 				}
-				if (e.key === 'y') { yankSelection(); return; }
+				if (e.key === 'y') {
+					if (visualAnchor) { yankSelection(); return; }
+					normalYankPendingRef.current = true;
+					setNormalYankPending(true);
+					return;
+				}
 				if (e.key === 'p') { pasteYanked(); return; }
 				if (e.key === 'd') { normalDeletePendingRef.current = true; setNormalDeletePending(true); return; }
 				if (e.key === 'c') { normalChangePendingRef.current = true; setNormalChangePending(true); return; }
@@ -735,6 +919,14 @@ const App = () => {
 					updateText(newText);
 					setMode('INSERT');
 					setCursor(lineEnd + 1);
+					return;
+				}
+				if (e.key === 'x') {
+					const cursorPos = normalCursorRef.current;
+					const newText = deleteRange(text, cursorPos, cursorPos + 1);
+					applyTextChange(newText);
+					const nextCursor = Math.min(cursorPos, Math.max(0, newText.length - 1));
+					setCursor(nextCursor);
 					return;
 				}
 				if (e.key === 'O') {
@@ -772,7 +964,7 @@ const App = () => {
 					return;
 				}
 				if (keyBuffer === ' ') {
-					if (e.key === 'a') { setKeyBuffer(''); setIsDocumentSwitcherOpen(true); return; }
+					if (e.key === 'a') { setKeyBuffer(''); setTopicMenuEditingId(null); setIsDocumentSwitcherOpen(true); return; }
 					setKeyBuffer('');
 					return;
 				}
@@ -943,7 +1135,7 @@ const App = () => {
 
 		window.addEventListener('keydown', handleKeyDown);
 		return () => window.removeEventListener('keydown', handleKeyDown);
-	}, [mode, keyBuffer, visualAnchor, yankBuffer, normalDeletePending, normalChangePending, hState, isSearching, selectionPending, lastSearchQuery, cursorIdx, derivIdx, searchQuery, isDocumentSwitcherOpen]);
+	}, [mode, keyBuffer, visualAnchor, yankBuffer, normalDeletePending, normalChangePending, normalYankPending, hState, isSearching, selectionPending, lastSearchQuery, cursorIdx, derivIdx, searchQuery, isDocumentSwitcherOpen]);
 
 	useLayoutEffect(() => {
 		if (activeRef.current) activeRef.current.scrollIntoView({ behavior: 'smooth', block: 'center' });
@@ -982,7 +1174,46 @@ const App = () => {
 	}, [hState]);
 
 	useEffect(() => {
+		setTopics(prev => prev.map(item => (item.id === activeTopicId ? { ...hState.topic } : item)));
+	}, [hState.topic, activeTopicId]);
+
+	useEffect(() => {
+		topicMenuIndexRef.current = topicMenuIndex;
+	}, [topicMenuIndex]);
+
+	useEffect(() => {
+		if (!isDocumentSwitcherOpen) return;
+		const activeIndex = topics.findIndex(item => item.id === activeTopicId);
+		const nextIndex = activeIndex >= 0 ? activeIndex : 0;
+		setTopicMenuIndex(nextIndex);
+		topicMenuIndexRef.current = nextIndex;
+		setTopicMenuEditingId(null);
+	}, [isDocumentSwitcherOpen, topics, activeTopicId]);
+
+	useEffect(() => {
+		if (!isDocumentSwitcherOpen || !topicMenuEditingId) return;
+		const focusInput = () => {
+			const input = document.querySelector<HTMLInputElement>(
+				`[data-testid="topic-title-input-${topicMenuEditingId}"]`
+			);
+			if (input) {
+				input.focus();
+				input.select();
+				return true;
+			}
+			return false;
+		};
+		requestAnimationFrame(() => {
+			if (focusInput()) return;
+			setTimeout(focusInput, 50);
+		});
+	}, [isDocumentSwitcherOpen, topicMenuEditingId, topics.length]);
+
+	useEffect(() => {
 		if (mode === 'INSERT') {
+			if (!insertBaseStateRef.current) {
+				insertBaseStateRef.current = hStateRef.current;
+			}
 			insertDirtyRef.current = false;
 			setInsertDirty(false);
 		}
@@ -995,6 +1226,10 @@ const App = () => {
 	useEffect(() => {
 		normalChangePendingRef.current = normalChangePending;
 	}, [normalChangePending]);
+
+	useEffect(() => {
+		normalYankPendingRef.current = normalYankPending;
+	}, [normalYankPending]);
 
 	useEffect(() => {
 		try {
@@ -1158,7 +1393,7 @@ const App = () => {
 				<div className="flex flex-col gap-2">
 					<LegendItem keys="Space + f" description="Convert all clozes into Anki cards" />
 					<LegendItem keys="Space + g" description="AI actions for the current block" />
-					<LegendItem keys="Space + a" description="Open document switcher" />
+					<LegendItem keys="Space + a" description="Open topic switcher" />
 					<LegendItem keys="Esc" description="Cancel leader chord" />
 				</div>
 			);
@@ -1238,7 +1473,7 @@ const App = () => {
 					<LegendItem keys="d" description="Begin delete chord" />
 					<LegendItem keys="c" description="Begin change chord" />
 					<LegendItem keys="Space" description="More actions..." />
-					<LegendItem keys="/" description="Search across the document" />
+					<LegendItem keys="/" description="Search across the topic" />
 				</div>
 			);
 		}
@@ -1256,7 +1491,12 @@ const App = () => {
 						alt="Engram"
 						className="w-24 h-6 object-contain"
 					/>
-					<h1 className="text-sm font-bold text-[#c0caf5] drop-shadow-[0_0_12px_rgba(26,27,38,0.9)]">{topic.title}</h1>
+					<h1
+						className="text-sm font-bold text-[#c0caf5] drop-shadow-[0_0_12px_rgba(26,27,38,0.9)]"
+						data-testid="topic-title"
+					>
+						{topic.title}
+					</h1>
 				</div>
 
 				<div className="flex items-center gap-3 justify-end min-w-[120px]">
@@ -1319,8 +1559,11 @@ const App = () => {
 												spellCheck={false}
 											/>
 										)}
-										<div className="break-words whitespace-pre-wrap min-h-[1.5em] text-[#c0caf5]">
-													{renderTextWithCursor(concept.text, cursorIdx === cIdx && derivIdx === -1, { cursorIdx: cIdx, derivIdx: -1 })}
+										<div
+											className="break-words whitespace-pre-wrap min-h-[1.5em] text-[#c0caf5]"
+											data-testid={`concept-text-${cIdx}`}
+										>
+												{renderTextWithCursor(concept.text, cursorIdx === cIdx && derivIdx === -1, { cursorIdx: cIdx, derivIdx: -1 })}
 										</div>
 									</div>
 								</div>
@@ -1682,26 +1925,89 @@ const App = () => {
 			)}
 
 			{isDocumentSwitcherOpen && (
-				<div className="fixed inset-0 z-50 flex items-center justify-center bg-[#0b0e17]/80">
+				<div className="fixed inset-0 z-50 flex items-center justify-center bg-[#0b0e17]/80" data-testid="topic-switcher">
 					<div className="w-[min(560px,90vw)] rounded-2xl border border-[#22283a] bg-[#141821] shadow-[0_30px_80px_rgba(6,8,14,0.65)]">
 						<div className="flex items-center justify-between border-b border-[#1f2536] bg-[#171c28] px-5 py-4">
 							<div>
-								<div className="text-[11px] font-bold tracking-[0.2em] text-[#cbd3f2]">DOCUMENTS</div>
-								<div className="text-[10px] text-[#94a0c6]">Choose a document to open</div>
+								<div className="text-[11px] font-bold tracking-[0.2em] text-[#cbd3f2]">TOPICS</div>
+								<div className="text-[10px] text-[#94a0c6]">Choose a topic to open</div>
 							</div>
 							<button
 								className="text-[10px] font-bold px-2 py-1 rounded border border-[#5b79d6]/40 text-[#9bb2ff] hover:bg-[#5b79d6]/15 transition"
-								onClick={() => setIsDocumentSwitcherOpen(false)}
+								data-testid="topic-close"
+								onClick={() => { setIsDocumentSwitcherOpen(false); setTopicMenuEditingId(null); }}
 							>
 								CLOSE
 							</button>
 						</div>
-						<div className="p-5">
-							<div className="rounded-xl border border-[#22283a] bg-[#161b27] p-4">
-								<div className="text-[10px] font-bold text-[#cbd3f2]">Current document</div>
-								<div className="mt-2 text-[12px] text-[#94a0c6]">{topic.title}</div>
+						<div className="p-5 space-y-4">
+							<div className="flex items-center justify-between">
+								<div>
+									<div className="text-[10px] font-bold text-[#cbd3f2]">Current topic</div>
+									<div className="mt-1 text-[12px] text-[#94a0c6]">{topic.title}</div>
+								</div>
+								<button
+									className="text-[10px] font-bold px-2 py-1 rounded border border-[#7aa2f7]/40 text-[#9bb2ff] hover:bg-[#5b79d6]/15 transition"
+									data-testid="topic-create"
+									onClick={createTopic}
+								>
+									NEW TOPIC
+								</button>
 							</div>
-							<div className="mt-4 text-[10px] text-[#7f8bb4]">No other documents available.</div>
+							<div className="rounded-lg border border-[#22283a] bg-[#161b27] px-3 py-2 text-[10px] text-[#94a0c6]">
+								{topicMenuEditingId ? (
+									<span><span className="font-bold text-[#cbd3f2]">Editing:</span> Esc finish, Enter open</span>
+								) : (
+									<span><span className="font-bold text-[#cbd3f2]">Keys:</span> j/k move, o new, c rename, Enter/l open, d delete, Esc close</span>
+								)}
+							</div>
+							<div className="space-y-2" data-testid="topic-list">
+								{topics.map((item, index) => (
+									<div
+										key={item.id}
+										data-testid={`topic-item-${item.id}`}
+										data-selected={topics[topicMenuIndex]?.id === item.id}
+										className={`flex items-center gap-2 rounded-lg border px-3 py-2 ${item.id === activeTopicId ? 'border-[#7aa2f7]/60 bg-[#1b2131]' : 'border-[#22283a] bg-[#161b27]'} ${topics[topicMenuIndex]?.id === item.id ? 'ring-1 ring-[#ff9e64] shadow-[0_0_10px_rgba(255,158,100,0.3)]' : ''}`}
+									>
+										<input
+											className="flex-1 bg-transparent text-[12px] text-[#c0caf5] outline-none"
+											value={topicDrafts[item.id] ?? item.title}
+											data-testid={`topic-title-input-${item.id}`}
+											autoFocus={item.id === topicMenuEditingId}
+											onChange={(e) => renameTopic(item.id, e.target.value)}
+											onFocus={() => { setTopicMenuEditingId(item.id); setTopicMenuIndex(index); }}
+											onBlur={() => setTopicMenuEditingId(prev => (prev === item.id ? null : prev))}
+											onKeyDown={(e) => {
+												if (e.key === 'Escape') {
+													e.preventDefault();
+													setTopicMenuEditingId(null);
+													(e.currentTarget as HTMLInputElement).blur();
+													return;
+												}
+												if (e.key === 'Enter') {
+													e.preventDefault();
+													openTopic(item.id);
+												}
+											}}
+											placeholder="Untitled Topic"
+										/>
+										<button
+											className="text-[10px] font-bold px-2 py-1 rounded border border-[#5b79d6]/40 text-[#9bb2ff] hover:bg-[#5b79d6]/15 transition"
+											data-testid={`topic-open-${item.id}`}
+											onClick={() => openTopic(item.id)}
+										>
+											OPEN
+										</button>
+										<button
+											className="text-[10px] font-bold px-2 py-1 rounded border border-[#f27a93]/40 text-[#ff9aaa] hover:bg-[#f27a93]/15 transition"
+											data-testid={`topic-delete-${item.id}`}
+											onClick={() => deleteTopic(item.id)}
+										>
+											DELETE
+										</button>
+									</div>
+								))}
+							</div>
 						</div>
 					</div>
 				</div>
