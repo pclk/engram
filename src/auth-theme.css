@@ -1,0 +1,124 @@
+:root {
+	--background: #1a1b26;
+	--foreground: #c0caf5;
+	--card: #24283b;
+	--card-foreground: #c0caf5;
+	--popover: #16161e;
+	--popover-foreground: #c0caf5;
+	--primary: #7aa2f7;
+	--primary-foreground: #1a1b26;
+	--secondary: #292e42;
+	--secondary-foreground: #c0caf5;
+	--muted: #1f2335;
+	--muted-foreground: #a9b1d6;
+	--accent: #bb9af7;
+	--accent-foreground: #1a1b26;
+	--destructive: #f7768e;
+	--destructive-foreground: #1a1b26;
+	--border: #2a2f45;
+	--input: #2a2f45;
+	--ring: #7aa2f7;
+	--neon-radius: 0.8rem;
+}
+
+.neon-auth-page {
+	min-height: 100vh;
+	background: #1a1b26;
+	color: #c0caf5;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	padding: 2.5rem 1.5rem;
+	font-family: 'JetBrains Mono', monospace;
+}
+
+.neon-auth-card {
+	width: min(420px, 92vw);
+	padding: 1.75rem 1.5rem 2rem;
+	background: #24283b;
+	border: 1px solid #2a2f45;
+	border-radius: 1rem;
+	box-shadow: 0 20px 60px rgba(0, 0, 0, 0.45);
+}
+
+.neon-auth-brand {
+	display: flex;
+	align-items: center;
+	gap: 0.75rem;
+	margin-bottom: 1.25rem;
+}
+
+.neon-auth-brand-badge {
+	width: 6rem;
+	height: 1.5rem;
+	border-radius: 0.25rem;
+	object-fit: contain;
+	background: #1f2335;
+	padding: 0.2rem;
+}
+
+.neon-auth-brand h1 {
+	font-size: 0.95rem;
+	font-weight: 700;
+	letter-spacing: 0.08em;
+	text-transform: uppercase;
+	margin: 0;
+}
+
+.neon-auth-brand p {
+	margin: 0.15rem 0 0;
+	font-size: 0.7rem;
+	color: #a9b1d6;
+	letter-spacing: 0.06em;
+}
+
+.neon-auth-root,
+.neon-auth-root * {
+	font-family: 'JetBrains Mono', monospace;
+}
+
+.neon-auth-root button {
+	border-radius: 0.75rem !important;
+	font-weight: 600 !important;
+	letter-spacing: 0.04em;
+}
+
+.neon-auth-root [data-slot="card-description"] {
+	color: #94a0c6;
+}
+
+.neon-auth-root input,
+.neon-auth-root textarea {
+	background: #1f2335 !important;
+	border-color: #2a2f45 !important;
+	color: #c0caf5 !important;
+}
+
+/* Hide built-in browser password reveal to keep custom icon */
+.neon-auth-root input[type="password"]::-ms-reveal,
+.neon-auth-root input[type="password"]::-ms-clear {
+	display: none;
+}
+
+.neon-auth-root input[type="password"]::-webkit-credentials-auto-fill-button {
+	visibility: hidden;
+}
+
+.neon-auth-links {
+	margin-top: 1.25rem;
+	display: flex;
+	justify-content: center;
+	gap: 0.6rem;
+	font-size: 0.7rem;
+	color: #a9b1d6;
+	letter-spacing: 0.05em;
+}
+
+.neon-auth-links a {
+	color: #7aa2f7;
+	text-decoration: none;
+}
+
+.neon-auth-links a:hover {
+	color: #bb9af7;
+}
