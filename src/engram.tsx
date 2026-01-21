@@ -96,6 +96,46 @@ const findPrevWord = (text: string, idx: number) => {
 	return i;
 };
 
+const findLineStart = (text: string, idx: number) => {
+	const before = text.lastIndexOf('\n', Math.max(0, idx - 1));
+	return before === -1 ? 0 : before + 1;
+};
+
+const findLineEnd = (text: string, idx: number) => {
+	const next = text.indexOf('\n', idx);
+	return next === -1 ? text.length : next;
+};
+
+const moveCursorLine = (text: string, idx: number, direction: -1 | 1) => {
+	if (!text.includes('\n')) return idx;
+	const lineStart = findLineStart(text, idx);
+	const lineEnd = findLineEnd(text, idx);
+	const column = idx - lineStart;
+	if (direction === 1) {
+		if (lineEnd >= text.length) return idx;
+		const nextStart = lineEnd + 1;
+		const nextEnd = findLineEnd(text, nextStart);
+		return Math.min(nextStart + column, Math.max(nextStart, nextEnd - 1));
+	}
+	if (lineStart === 0) return idx;
+	const prevEnd = lineStart - 1;
+	const prevStart = findLineStart(text, prevEnd);
+	return Math.min(prevStart + column, Math.max(prevStart, prevEnd));
+};
+
+const findEndWord = (text: string, idx: number) => {
+	if (!text.length) return 0;
+	let i = Math.min(idx, text.length - 1);
+	const atEndOfWord = isWordChar(text[i]) && (i === text.length - 1 || !isWordChar(text[i + 1]));
+	if (!isWordChar(text[i]) || atEndOfWord) {
+		i++;
+		while (i < text.length && !isWordChar(text[i])) i++;
+		if (i >= text.length) return text.length - 1;
+	}
+	while (i < text.length - 1 && isWordChar(text[i + 1])) i++;
+	return i;
+};
+
 function useUndo(initialState: HistoryState) {
 	const [past, setPast] = useState<HistoryState[]>([]);
 	const [present, setPresent] = useState<HistoryState>(initialState);
@@ -158,15 +198,22 @@ const App = () => {
 		cursorIdx: 0,
 		derivIdx: -1
 	});
+	const hStateRef = useRef(hState);
 
 	const { topic, cursorIdx, derivIdx } = hState;
 	const [mode, setMode] = useState<Mode>('BLOCK');
 	const [normalCursor, setNormalCursor] = useState(0);
 	const [keyBuffer, setKeyBuffer] = useState('');
-	const [leaderActive, setLeaderActive] = useState(false);
 	const [visualAnchor, setVisualAnchor] = useState<{ kind: 'text' | 'block'; cursorIdx: number; derivIdx: number; charIndex?: number } | null>(null);
 	const [yankBuffer, setYankBuffer] = useState<YankedItem[] | null>(null);
 	const [yankText, setYankText] = useState<string | null>(null);
+	const [normalDeletePending, setNormalDeletePending] = useState(false);
+	const normalDeletePendingRef = useRef(false);
+	const [normalChangePending, setNormalChangePending] = useState(false);
+	const normalChangePendingRef = useRef(false);
+	const [insertDirty, setInsertDirty] = useState(false);
+	const insertDirtyRef = useRef(false);
+	const insertSkipCommitRef = useRef(false);
 	const [searchQuery, setSearchQuery] = useState('');
 	const [lastSearchQuery, setLastSearchQuery] = useState('');
 	const [isSearching, setIsSearching] = useState(false);
@@ -306,6 +353,22 @@ const App = () => {
 		}
 	};
 
+	const deleteRange = (text: string, start: number, end: number) => {
+		const safeStart = Math.max(0, Math.min(start, text.length));
+		const safeEnd = Math.max(safeStart, Math.min(end, text.length));
+		return text.slice(0, safeStart) + text.slice(safeEnd);
+	};
+
+	const deleteCurrentLine = (text: string, cursor: number) => {
+		const lineStart = findLineStart(text, cursor);
+		const lineEnd = findLineEnd(text, cursor);
+		let start = lineStart;
+		let end = lineEnd;
+		if (lineEnd < text.length) end = lineEnd + 1;
+		else if (lineStart > 0) start = lineStart - 1;
+		return { text: deleteRange(text, start, end), cursor: start };
+	};
+
 	const pasteYanked = () => {
 		if (mode === 'NORMAL' && yankText && currentConcept) {
 			const baseText = derivIdx === -1 ? currentConcept.text : (currentDeriv?.text || '');
@@ -351,9 +414,33 @@ const App = () => {
 			newTopic.concepts[cursorIdx].derivatives = newDerivs;
 		}
 		setHState({ ...hState, topic: newTopic });
+		if (mode === 'INSERT') {
+			insertDirtyRef.current = true;
+			setInsertDirty(true);
+		}
 	};
 
-	const commitToHistory = () => pushState(hState);
+	const applyChangeAndEnterInsert = (text: string, nextCursor: number) => {
+		const newTopic = buildTopicWithText(text);
+		pushState({ topic: newTopic, cursorIdx, derivIdx });
+		insertSkipCommitRef.current = true;
+		setMode('INSERT');
+		setCursor(nextCursor);
+	};
+
+	const buildTopicWithText = (text: string) => {
+		const newTopic = { ...topic, concepts: [...topic.concepts] };
+		if (derivIdx === -1) {
+			newTopic.concepts[cursorIdx] = { ...newTopic.concepts[cursorIdx], text };
+		} else {
+			const newDerivs = [...newTopic.concepts[cursorIdx].derivatives];
+			newDerivs[derivIdx] = { ...newDerivs[derivIdx], text };
+			newTopic.concepts[cursorIdx].derivatives = newDerivs;
+		}
+		return newTopic;
+	};
+
+	const commitToHistory = () => pushState(hStateRef.current);
 
 	const handleAnkify = () => {
 		setAnkifyStatus('SUCCESS');
@@ -430,6 +517,7 @@ const App = () => {
 			pushState({ topic: newTopic, cursorIdx, derivIdx: realIdx });
 			setMode('INSERT');
 			setNormalCursor(0);
+			insertSkipCommitRef.current = true;
 			setHState(prev => ({ ...prev, derivIdx: realIdx }));
 		}
 		setSelectionPending(null);
@@ -482,6 +570,7 @@ const App = () => {
 
 	useEffect(() => {
 		const handleKeyDown = (e: KeyboardEvent) => {
+			if (e.ctrlKey && (e.key === 'r' || e.key === 'R')) return;
 			if (isDocumentSwitcherOpen) {
 				e.preventDefault();
 				if (e.key === 'Escape') setIsDocumentSwitcherOpen(false);
@@ -496,15 +585,6 @@ const App = () => {
 					navigateSearch(query, false);
 					setIsSearching(false);
 				}
-				return;
-			}
-
-			if (leaderActive) {
-				e.preventDefault();
-				setLeaderActive(false);
-				if (mode === 'NORMAL' && e.key === 'f') { handleAnkify(); return; }
-				if (mode === 'NORMAL' && e.key === 'g') { handleGenerate(); return; }
-				if (e.key === 'a') { setIsDocumentSwitcherOpen(true); return; }
 				return;
 			}
 
@@ -523,8 +603,11 @@ const App = () => {
 				if (e.key === 'Escape') {
 					e.preventDefault();
 					setMode('NORMAL');
-					commitToHistory();
-					setCursor(Math.max(0, normalCursorRef.current - 1));
+					if (insertDirtyRef.current && !insertSkipCommitRef.current) commitToHistory();
+					insertSkipCommitRef.current = false;
+					insertDirtyRef.current = false;
+					setInsertDirty(false);
+					setCursor(Math.max(0, normalCursorRef.current));
 				}
 				return;
 			}
@@ -534,10 +617,91 @@ const App = () => {
 				const text = derivIdx === -1 ? currentConcept.text : (currentDeriv?.text || '');
 				if (e.key === 'Escape') {
 					if (visualAnchor) { setVisualAnchor(null); return; }
+					if (keyBuffer === ' ') { setKeyBuffer(''); return; }
+					if (normalDeletePendingRef.current) { normalDeletePendingRef.current = false; setNormalDeletePending(false); return; }
+					if (normalChangePendingRef.current) { normalChangePendingRef.current = false; setNormalChangePending(false); return; }
 					setMode('BLOCK');
 					return;
 				}
-				if (e.key === ' ') { setLeaderActive(true); return; }
+				if (normalDeletePendingRef.current) {
+					const cursorPos = normalCursorRef.current;
+					if (e.key === 'w') {
+						const end = findNextWord(text, cursorPos);
+						const newText = deleteRange(text, cursorPos, end);
+						updateTopic(buildTopicWithText(newText));
+						setCursor(Math.min(cursorPos, newText.length));
+						normalDeletePendingRef.current = false;
+						setNormalDeletePending(false);
+						return;
+					}
+					if (e.key === 'e') {
+						const end = Math.min(text.length, findEndWord(text, cursorPos) + 1);
+						const newText = deleteRange(text, cursorPos, end);
+						updateTopic(buildTopicWithText(newText));
+						setCursor(Math.min(cursorPos, newText.length));
+						normalDeletePendingRef.current = false;
+						setNormalDeletePending(false);
+						return;
+					}
+					if (e.key === 'b') {
+						const start = findPrevWord(text, cursorPos);
+						const newText = deleteRange(text, start, cursorPos);
+						updateTopic(buildTopicWithText(newText));
+						setCursor(start);
+						normalDeletePendingRef.current = false;
+						setNormalDeletePending(false);
+						return;
+					}
+					if (e.key === 'd') {
+						const { text: newText, cursor: nextCursor } = deleteCurrentLine(text, cursorPos);
+						updateTopic(buildTopicWithText(newText));
+						setCursor(Math.min(nextCursor, newText.length));
+						normalDeletePendingRef.current = false;
+						setNormalDeletePending(false);
+						return;
+					}
+					normalDeletePendingRef.current = false;
+					setNormalDeletePending(false);
+					return;
+				}
+				if (normalChangePendingRef.current) {
+					const cursorPos = normalCursorRef.current;
+					if (e.key === 'w') {
+						const end = findNextWord(text, cursorPos);
+						const newText = deleteRange(text, cursorPos, end);
+						applyChangeAndEnterInsert(newText, Math.min(cursorPos, newText.length));
+						normalChangePendingRef.current = false;
+						setNormalChangePending(false);
+						return;
+					}
+					if (e.key === 'e') {
+						const end = Math.min(text.length, findEndWord(text, cursorPos) + 1);
+						const newText = deleteRange(text, cursorPos, end);
+						applyChangeAndEnterInsert(newText, Math.min(cursorPos, newText.length));
+						normalChangePendingRef.current = false;
+						setNormalChangePending(false);
+						return;
+					}
+					if (e.key === 'b') {
+						const start = findPrevWord(text, cursorPos);
+						const newText = deleteRange(text, start, cursorPos);
+						applyChangeAndEnterInsert(newText, start);
+						normalChangePendingRef.current = false;
+						setNormalChangePending(false);
+						return;
+					}
+					if (e.key === 'c') {
+						const { text: newText, cursor: nextCursor } = deleteCurrentLine(text, cursorPos);
+						applyChangeAndEnterInsert(newText, Math.min(nextCursor, newText.length));
+						normalChangePendingRef.current = false;
+						setNormalChangePending(false);
+						return;
+					}
+					normalChangePendingRef.current = false;
+					setNormalChangePending(false);
+					return;
+				}
+				if (e.key === ' ') { setKeyBuffer(' '); return; }
 				if (e.key === 'v') {
 					setVisualAnchor(prev => (prev && prev.kind === 'text'
 						? null
@@ -545,8 +709,17 @@ const App = () => {
 					));
 					return;
 				}
+				if (keyBuffer === ' ') {
+					if (e.key === 'f') { setKeyBuffer(''); handleAnkify(); return; }
+					if (e.key === 'g') { setKeyBuffer(''); handleGenerate(); return; }
+					if (e.key === 'a') { setKeyBuffer(''); setIsDocumentSwitcherOpen(true); return; }
+					setKeyBuffer('');
+					return;
+				}
 				if (e.key === 'y') { yankSelection(); return; }
 				if (e.key === 'p') { pasteYanked(); return; }
+				if (e.key === 'd') { normalDeletePendingRef.current = true; setNormalDeletePending(true); return; }
+				if (e.key === 'c') { normalChangePendingRef.current = true; setNormalChangePending(true); return; }
 
 				if (e.key === '/') { setIsSearching(true); setSearchQuery(''); return; }
 				if (e.key === 'n') { navigateSearch(lastSearchQuery, false); return; }
@@ -556,26 +729,51 @@ const App = () => {
 				if (e.key === 'I') { setMode('INSERT'); setCursor(0); return; }
 				if (e.key === 'a') { setMode('INSERT'); setCursor(Math.min(normalCursorRef.current + 1, text.length)); return; }
 				if (e.key === 'A') { setMode('INSERT'); setCursor(text.length); return; }
+				if (e.key === 'o') {
+					const lineEnd = findLineEnd(text, normalCursorRef.current);
+					const newText = text.slice(0, lineEnd) + '\n' + text.slice(lineEnd);
+					updateText(newText);
+					setMode('INSERT');
+					setCursor(lineEnd + 1);
+					return;
+				}
+				if (e.key === 'O') {
+					const lineStart = findLineStart(text, normalCursorRef.current);
+					const newText = text.slice(0, lineStart) + '\n' + text.slice(lineStart);
+					updateText(newText);
+					setMode('INSERT');
+					setCursor(lineStart);
+					return;
+				}
 				if (e.key === 'h') setCursor(Math.max(0, normalCursorRef.current - 1));
 				if (e.key === 'l') setCursor(Math.min(text.length - 1, normalCursorRef.current + 1));
 				if (e.key === '0') setCursor(0);
 				if (e.key === '$') setCursor(text.length - 1);
 				if (e.key === 'w') setCursor(findNextWord(text, normalCursorRef.current));
 				if (e.key === 'b') setCursor(findPrevWord(text, normalCursorRef.current));
+				if (e.key === 'e') setCursor(findEndWord(text, normalCursorRef.current));
+				if (e.key === 'j') { setCursor(moveCursorLine(text, normalCursorRef.current, 1)); return; }
+				if (e.key === 'k') { setCursor(moveCursorLine(text, normalCursorRef.current, -1)); return; }
 				if (e.key === 'u') undo();
-				if (e.key === 'r' && e.ctrlKey) redo();
+				if (e.key === 'r') redo();
 				return;
 			}
 
 			if (mode === 'BLOCK') {
 				e.preventDefault();
 				if (e.key === 'Escape' && visualAnchor) { setVisualAnchor(null); return; }
-				if (!keyBuffer && e.key === ' ') { setLeaderActive(true); return; }
+				if (e.key === 'Escape' && keyBuffer === ' ') { setKeyBuffer(''); return; }
+				if (!keyBuffer && e.key === ' ') { setKeyBuffer(' '); return; }
 				if (!keyBuffer && e.key === 'v') {
 					setVisualAnchor(prev => (prev && prev.kind === 'block'
 						? null
 						: { kind: 'block', cursorIdx, derivIdx }
 					));
+					return;
+				}
+				if (keyBuffer === ' ') {
+					if (e.key === 'a') { setKeyBuffer(''); setIsDocumentSwitcherOpen(true); return; }
+					setKeyBuffer('');
 					return;
 				}
 				if (!keyBuffer && e.key === 'y') { yankSelection(); return; }
@@ -667,6 +865,7 @@ const App = () => {
 							updateTopic(newTopic);
 							setMode('INSERT');
 							setNormalCursor(0);
+							insertSkipCommitRef.current = true;
 							setKeyBuffer('');
 						} else if (e.key === 'p') {
 							const probes = currentConcept.derivatives.filter(d => d.type === 'PROBING');
@@ -678,6 +877,7 @@ const App = () => {
 								updateTopic(newTopic, cursorIdx, realIdx);
 								setMode('INSERT');
 								setNormalCursor(0);
+								insertSkipCommitRef.current = true;
 								setKeyBuffer('');
 							} else if (probes.length > 1) {
 								setSelectionPending({ action: 'CHANGE', type: 'PROBING', candidates: probes });
@@ -692,6 +892,7 @@ const App = () => {
 								updateTopic(newTopic, cursorIdx, realIdx);
 								setMode('INSERT');
 								setNormalCursor(0);
+								insertSkipCommitRef.current = true;
 								setKeyBuffer('');
 							} else if (clozes.length > 1) {
 								setSelectionPending({ action: 'CHANGE', type: 'CLOZE', candidates: clozes });
@@ -699,12 +900,6 @@ const App = () => {
 						}
 						return;
 					}
-				}
-				if (e.key === 'g') {
-					if (derivIdx === -1 && !keyBuffer) handleGenerate();
-				}
-				if (e.key === 'z') {
-					if (!keyBuffer) handleAnkify();
 				}
 				if (e.key === 'j') {
 					if (derivIdx === -1) setHState(prev => ({ ...prev, cursorIdx: Math.min(prev.cursorIdx + 1, topic.concepts.length - 1) }));
@@ -742,13 +937,13 @@ const App = () => {
 				if (e.key === 'd') setKeyBuffer('d');
 				if (e.key === 'c') setKeyBuffer('c');
 				if (e.key === 'u') undo();
-				if (e.key === 'r' && e.ctrlKey) redo();
+				if (e.key === 'r') redo();
 			}
 		};
 
 		window.addEventListener('keydown', handleKeyDown);
 		return () => window.removeEventListener('keydown', handleKeyDown);
-	}, [mode, keyBuffer, leaderActive, visualAnchor, yankBuffer, hState, isSearching, selectionPending, lastSearchQuery, cursorIdx, derivIdx, searchQuery, isDocumentSwitcherOpen]);
+	}, [mode, keyBuffer, visualAnchor, yankBuffer, normalDeletePending, normalChangePending, hState, isSearching, selectionPending, lastSearchQuery, cursorIdx, derivIdx, searchQuery, isDocumentSwitcherOpen]);
 
 	useLayoutEffect(() => {
 		if (activeRef.current) activeRef.current.scrollIntoView({ behavior: 'smooth', block: 'center' });
@@ -781,6 +976,25 @@ const App = () => {
 	useEffect(() => {
 		normalCursorRef.current = normalCursor;
 	}, [normalCursor]);
+
+	useEffect(() => {
+		hStateRef.current = hState;
+	}, [hState]);
+
+	useEffect(() => {
+		if (mode === 'INSERT') {
+			insertDirtyRef.current = false;
+			setInsertDirty(false);
+		}
+	}, [mode]);
+
+	useEffect(() => {
+		normalDeletePendingRef.current = normalDeletePending;
+	}, [normalDeletePending]);
+
+	useEffect(() => {
+		normalChangePendingRef.current = normalChangePending;
+	}, [normalChangePending]);
 
 	useEffect(() => {
 		try {
@@ -828,7 +1042,7 @@ const App = () => {
 			: "bg-[#e0af68] text-[#1a1b26]";
 
 		if (mode === 'NORMAL' && isFocused) {
-			if (!text) return <span className="normal-focus w-2 h-5 inline-block align-middle"></span>;
+			if (!text) return <span className="char-cursor">&nbsp;</span>;
 
 			const ranges: { start: number, end: number }[] = [];
 			if (hasSearch) {
@@ -850,9 +1064,23 @@ const App = () => {
 						if (isSelected) className += "bg-[#bb9af7] text-[#1a1b26] ";
 						if (i === normalCursor) className += "char-cursor ";
 
+						if (char === '\n' && i === normalCursor) {
+							return (
+								<span key={i}>
+									<span className="char-cursor">&nbsp;</span>
+									{char}
+								</span>
+							);
+						}
+
 						return <span key={i} className={className}>{char}</span>;
 					})}
-					{normalCursor === text.length && <span className="char-cursor">&nbsp;</span>}
+					{normalCursor === text.length && !text.endsWith('\n') && <span className="char-cursor">&nbsp;</span>}
+					{text.endsWith('\n') && (
+						<span className="block">
+							{normalCursor === text.length ? <span className="char-cursor">&nbsp;</span> : <span>&nbsp;</span>}
+						</span>
+					)}
 				</span>
 			);
 		}
@@ -867,11 +1095,20 @@ const App = () => {
 							? <span key={i} className={matchClass}>{part}</span>
 							: <span key={i} className={!text && i === 0 ? "opacity-30 italic" : ""}>{part || (text ? "" : "Empty...")}</span>
 					))}
+					{text.endsWith('\n') && <span className="block">&nbsp;</span>}
 				</span>
 			);
 		}
 
-		return <span className={!text ? "opacity-30 italic" : ""}>{text || "Empty..."}</span>;
+		if (mode === 'INSERT' && isFocused && !text) {
+			return <span className="char-cursor">&nbsp;</span>;
+		}
+		return (
+			<span className={!text ? "opacity-30 italic" : ""}>
+				{text || "Empty..."}
+				{text.endsWith('\n') && <span className="block">&nbsp;</span>}
+			</span>
+		);
 	};
 
 	const getStatusColor = () => {
@@ -916,6 +1153,17 @@ const App = () => {
 			);
 		}
 
+		if (keyBuffer === ' ') {
+			return (
+				<div className="flex flex-col gap-2">
+					<LegendItem keys="Space + f" description="Convert all clozes into Anki cards" />
+					<LegendItem keys="Space + g" description="AI actions for the current block" />
+					<LegendItem keys="Space + a" description="Open document switcher" />
+					<LegendItem keys="Esc" description="Cancel leader chord" />
+				</div>
+			);
+		}
+
 		if (selectionPending) return (
 			<div className="flex items-center gap-2">
 				<span className="text-[#ff9e64] text-[10px] font-bold">SELECT {selectionPending.type}</span>
@@ -936,18 +1184,19 @@ const App = () => {
 					<LegendItem keys="Esc" description="Return to Block mode" />
 					<LegendItem keys="i" description="Insert before cursor" />
 					<LegendItem keys="a" description="Insert after cursor" />
+					<LegendItem keys="o / O" description="Open new line below / above" />
 					<LegendItem keys="h / j / k / l" description="Move cursor left / down / up / right" />
-					<LegendItem keys="w / b" description="Jump to next / previous word" />
+					<LegendItem keys="w / b / e" description="Jump to next / previous / end of word" />
 					<LegendItem keys="v" description="Toggle Visual selection" />
 					<LegendItem keys="y" description="Yank (copy) the current block/selection" />
 					<LegendItem keys="p" description="Paste the yanked content below" />
+					<LegendItem keys="d" description="Delete: dw / de / db / dd" />
+					<LegendItem keys="c" description="Change: cw / ce / cb / cc" />
+					<LegendItem keys="Space" description="More actions..." />
 					<LegendItem keys="/" description="Search within concepts and derivatives" />
 					<LegendItem keys="n / N" description="Next / previous search match" />
-					<LegendItem keys="Space + f" description="Convert all clozes into Anki cards" />
-					<LegendItem keys="Space + g" description="AI actions for the current block" />
-					<LegendItem keys="Space + a" description="Open document switcher" />
 					<LegendItem keys="u" description="Undo last change" />
-					<LegendItem keys="Ctrl+r" description="Redo last undo" />
+					<LegendItem keys="r" description="Redo last undo" />
 				</div>
 			);
 		}
@@ -988,10 +1237,8 @@ const App = () => {
 					<LegendItem keys="p" description="Paste the yanked content below" />
 					<LegendItem keys="d" description="Begin delete chord" />
 					<LegendItem keys="c" description="Begin change chord" />
+					<LegendItem keys="Space" description="More actions..." />
 					<LegendItem keys="/" description="Search across the document" />
-					<LegendItem keys="Space + a" description="Open document switcher" />
-					<LegendItem keys="g" description="Generate probing + cloze with AI" />
-					<LegendItem keys="z" description="Sync to Anki (ankify)" />
 				</div>
 			);
 		}
@@ -1025,14 +1272,6 @@ const App = () => {
 								<span>{initials}</span>
 							)}
 						</button>
-						<div className={`flex items-center gap-1.5 text-[10px] font-bold px-2 py-1 rounded transition-colors ${isGenerating ? 'bg-[#bb9af7]/40 text-[#1a1b26] animate-pulse' : 'text-[#bb9af7] hover:bg-[#bb9af7]/10'}`}>
-							<span className="border border-[#bb9af7]/30 px-1 rounded bg-[#bb9af7]/10 min-w-[1.2rem] text-center">g</span>
-							<span>AI</span>
-						</div>
-						<div className={`flex items-center gap-1.5 text-[10px] font-bold px-2 py-1 rounded transition-colors duration-500 ${ankifyStatus === 'SUCCESS' ? 'bg-[#9ece6a] text-[#1a1b26]' : 'text-[#7dcfff] hover:bg-[#7dcfff]/10'}`}>
-							<span className={`border px-1 rounded min-w-[1.2rem] text-center ${ankifyStatus === 'SUCCESS' ? 'border-transparent bg-black/10' : 'border-[#7dcfff]/30 bg-[#7dcfff]/10'}`}>z</span>
-							<span>{ankifyStatus === 'SUCCESS' ? 'SYNCED' : 'ANKIFY'}</span>
-						</div>
 					</div>
 				</div>
 			</div>
