@@ -25,6 +25,8 @@ type YankedItem =
 	| { kind: 'concept'; concept: Concept }
 	| { kind: 'derivative'; derivative: Derivative };
 
+const NORMAL_FAST_RENDER_LIMIT = 2000;
+
 interface Derivative {
 	id: string;
 	type: DerivativeType;
@@ -1815,6 +1817,42 @@ const App = () => {
 
 		if (mode === 'NORMAL' && isFocused) {
 			if (!text) return <span className="char-cursor">&nbsp;</span>;
+
+			const shouldFastRender =
+				text.length > NORMAL_FAST_RENDER_LIMIT &&
+				!hasSearch &&
+				!isVisualText &&
+				!isYankFlash;
+
+			if (shouldFastRender) {
+				const cursor = Math.max(0, Math.min(normalCursor, text.length));
+				const before = text.slice(0, cursor);
+				const cursorChar = cursor < text.length ? text[cursor] : '';
+				const after = cursor < text.length ? text.slice(cursor + 1) : '';
+
+				return (
+					<span>
+						{before}
+						{cursor === text.length
+							? <span className="char-cursor">&nbsp;</span>
+							: cursorChar === '\n'
+								? (
+									<span>
+										<span className="char-cursor">&nbsp;</span>
+										{cursorChar}
+									</span>
+								)
+								: <span className="char-cursor">{cursorChar === ' ' ? '\u00A0' : cursorChar}</span>
+						}
+						{after}
+						{text.endsWith('\n') && (
+							<span className="block">
+								{cursor === text.length ? <span className="char-cursor">&nbsp;</span> : <span>&nbsp;</span>}
+							</span>
+						)}
+					</span>
+				);
+			}
 
 			const ranges: { start: number, end: number }[] = [];
 			if (hasSearch) {
