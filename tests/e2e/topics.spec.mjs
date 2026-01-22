@@ -25,6 +25,32 @@ const waitForAnyTopicTitleValue = async (page, text, timeout = 10000) => {
 	throw new Error(`Expected a topic title to include "${text}", got ${JSON.stringify(lastValues)}`);
 };
 
+const waitForConceptIncludes = async (page, text, timeout = 10000) => {
+	const start = Date.now();
+	let last = '';
+	while (Date.now() - start < timeout) {
+		last = await getConceptText(page);
+		if (last.includes(text)) return;
+		await new Promise(resolve => setTimeout(resolve, 100));
+	}
+	throw new Error(`Expected concept text to include "${text}", got "${last}"`);
+};
+
+const findTopicIdByTitle = async (page, text, timeout = 10000) => {
+	const start = Date.now();
+	let last = [];
+	while (Date.now() - start < timeout) {
+		last = await page.$$eval('[data-testid^="topic-title-input-"]', els => els.map(el => ({
+			id: (el.getAttribute('data-testid') || '').replace('topic-title-input-', ''),
+			value: el.value
+		})));
+		const match = last.find(item => item.value.includes(text));
+		if (match?.id) return match.id;
+		await new Promise(resolve => setTimeout(resolve, 100));
+	}
+	throw new Error(`Expected to find topic title including "${text}", got ${JSON.stringify(last)}`);
+};
+
 const runStep = async (label, fn) => {
 	const start = Date.now();
 	console.log(`E2E Spec: ${label} - start`);
@@ -45,11 +71,39 @@ const openTopicSwitcher = async (page) => {
 	await page.waitForSelector('[data-testid="topic-switcher"]', { timeout: 10000 });
 };
 
+const waitForPersistenceNotError = async (page, timeout = 10000) => {
+	const start = Date.now();
+	let last = '';
+	while (Date.now() - start < timeout) {
+		const statusEl = await page.$('[data-testid="persistence-status"]');
+		if (!statusEl) return;
+		last = await page.$eval('[data-testid="persistence-status"]', el => el.textContent ?? '');
+		if (!/ERROR|MISMATCH/i.test(last)) return;
+		await new Promise(resolve => setTimeout(resolve, 100));
+	}
+	throw new Error(`Expected persistence status to be non-error, got "${last}"`);
+};
+
+const waitForPersistenceMessage = async (page, timeout = 10000) => {
+	const start = Date.now();
+	let last = '';
+	while (Date.now() - start < timeout) {
+		const messageEl = await page.$('[data-testid="persistence-message"]');
+		if (!messageEl) return;
+		last = await page.$eval('[data-testid="persistence-message"]', el => el.textContent ?? '');
+		if (last.trim().length > 0) return;
+		await new Promise(resolve => setTimeout(resolve, 100));
+	}
+	throw new Error('Expected persistence message to be visible.');
+};
+
 export async function run({ page, baseUrl }) {
 	const url = new URL('/__e2e', baseUrl).toString();
 	await page.goto(url, { waitUntil: 'domcontentloaded' });
 	await page.waitForSelector('[data-testid="concept-text-0"]');
 	await page.click('body');
+	await waitForPersistenceNotError(page);
+	await waitForPersistenceMessage(page);
 
 	await runStep('Topics CRUD + menu keybindings', async () => {
 		await openTopicSwitcher(page);
@@ -83,6 +137,8 @@ export async function run({ page, baseUrl }) {
 		await page.keyboard.press('Escape');
 		await page.keyboard.press('Enter');
 		await page.waitForSelector('[data-testid="topic-switcher"]', { hidden: true, timeout: 10000 });
+		await waitForPersistenceNotError(page);
+		await waitForPersistenceMessage(page);
 
 		const title = await page.$eval('[data-testid="topic-title"]', el => el.textContent?.trim() || '');
 		if (title !== 'My Topic') {
@@ -152,6 +208,70 @@ export async function run({ page, baseUrl }) {
 			beforeDeleteCount
 		);
 		await page.keyboard.press('Escape');
+	});
+
+	await runStep('Topics persistence across reload', async () => {
+		await openTopicSwitcher(page);
+		const beforeCount = await page.$$eval('[data-testid^="topic-item-"]', els => els.length);
+		await page.keyboard.press('o');
+		await page.waitForFunction(
+			(selector, count) => document.querySelectorAll(selector).length === count + 1,
+			{},
+			'[data-testid^="topic-item-"]',
+			beforeCount
+		);
+		const createdId = await page.$$eval('[data-testid^="topic-item-"]', els => {
+			const last = els[els.length - 1];
+			const id = last?.getAttribute('data-testid') || '';
+			return id.replace('topic-item-', '');
+		});
+		const inputSelector = `[data-testid="topic-title-input-${createdId}"]`;
+		await page.type(inputSelector, 'Persistent Topic');
+		await page.keyboard.press('Escape');
+		await page.keyboard.press('Enter');
+		await page.waitForSelector('[data-testid="topic-switcher"]', { hidden: true, timeout: 10000 });
+
+		await page.keyboard.press('i');
+		await page.keyboard.press('i');
+		await page.keyboard.type('Persistent concept ');
+		await page.keyboard.press('Escape');
+		await waitForConceptIncludes(page, 'Persistent concept');
+		await page.keyboard.press('Escape');
+
+		await page.keyboard.press('l');
+		await page.keyboard.press('o');
+		await page.keyboard.press('p');
+		await page.waitForSelector('textarea');
+		await page.type('textarea', 'Persistent derivative');
+		await page.keyboard.press('Escape');
+		await page.keyboard.press('Escape');
+		await page.waitForSelector('[data-testid^="derivative-text-0-0"]', { timeout: 10000 });
+		await waitForPersistenceNotError(page);
+		await waitForPersistenceMessage(page);
+		const derivativeText = await page.$eval('[data-testid="derivative-text-0-0"]', el => el.textContent ?? '');
+		if (!derivativeText.includes('Persistent derivative')) {
+			throw new Error(`Expected derivative to include "Persistent derivative", got "${derivativeText}"`);
+		}
+
+		await new Promise(resolve => setTimeout(resolve, 700));
+		await page.reload({ waitUntil: 'domcontentloaded' });
+		await page.waitForSelector('[data-testid="concept-text-0"]');
+		await page.click('body');
+		await waitForPersistenceNotError(page);
+		await waitForPersistenceMessage(page);
+
+		await openTopicSwitcher(page);
+		const persistedId = await findTopicIdByTitle(page, 'Persistent Topic');
+		await page.click(`[data-testid="topic-open-${persistedId}"]`);
+		await page.waitForSelector('[data-testid="topic-switcher"]', { hidden: true, timeout: 10000 });
+
+		await waitForConceptIncludes(page, 'Persistent concept');
+		await page.keyboard.press('l');
+		await page.waitForSelector('[data-testid="derivative-text-0-0"]', { timeout: 10000 });
+		const persistedDerivative = await page.$eval('[data-testid="derivative-text-0-0"]', el => el.textContent ?? '');
+		if (!persistedDerivative.includes('Persistent derivative')) {
+			throw new Error(`Expected persisted derivative to include "Persistent derivative", got "${persistedDerivative}"`);
+		}
 	});
 
 	await runStep('Topic flow: create, name, enter (keyboard only)', async () => {

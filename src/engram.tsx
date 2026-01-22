@@ -1,5 +1,7 @@
 import React, { useState, useEffect, useRef, useLayoutEffect } from 'react';
-import { authClient } from './lib/auth';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
+import { authClient, neon } from './lib/auth';
 
 // --- Configuration & Types ---
 
@@ -15,6 +17,7 @@ const loadAi = async () => {
 	genAiType = mod.Type;
 	return { ai: aiClient, Type: genAiType };
 };
+
 
 type Mode = 'BLOCK' | 'NORMAL' | 'INSERT';
 type DerivativeType = 'PROBING' | 'CLOZE' | 'ELABORATION';
@@ -49,23 +52,14 @@ interface HistoryState {
 	derivIdx: number;
 }
 
-// --- Helpers ---
+const isE2E = import.meta.env.VITE_E2E === 'true';
+const neonSchema = import.meta.env.VITE_NEON_SCHEMA || 'public';
+const LOCAL_TOPICS_KEY = 'engram.topics.v1';
+const LOCAL_ACTIVE_TOPIC_KEY = 'engram.activeTopicId.v1';
 
-const generateId = () => Math.random().toString(36).substr(2, 9);
-
-const INITIAL_TOPIC: Topic = {
-	id: 't1',
-	title: 'Information Theory',
-	concepts: [
-		{
-			id: 'c1',
-			text: 'Entropy represents the expected value of information contained in a message.',
-			derivatives: [
-				{ id: 'd1', type: 'PROBING', text: 'How does this relate to compression?' },
-				{ id: 'd2', type: 'CLOZE', text: 'High entropy implies {{c1::unpredictability}}.' }
-			]
-		}
-	]
+const generateId = () => {
+	if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) return crypto.randomUUID();
+	return Math.random().toString(36).slice(2, 11);
 };
 
 const createEmptyTopic = (title = 'Untitled Topic'): Topic => ({
@@ -73,6 +67,56 @@ const createEmptyTopic = (title = 'Untitled Topic'): Topic => ({
 	title,
 	concepts: [{ id: generateId(), text: '', derivatives: [] }]
 });
+
+const INITIAL_TOPIC: Topic = createEmptyTopic('Untitled Topic');
+
+const normalizeTopic = (topic: Topic): Topic => {
+	if (!Array.isArray(topic.concepts) || topic.concepts.length === 0) {
+		return { ...topic, concepts: [{ id: generateId(), text: '', derivatives: [] }] };
+	}
+	return {
+		...topic,
+		concepts: topic.concepts.map(concept => ({
+			...concept,
+			derivatives: Array.isArray(concept.derivatives) ? concept.derivatives : []
+		}))
+	};
+};
+
+	const stableStringify = (value: unknown): string => {
+		const sortValue = (input: any): any => {
+			if (Array.isArray(input)) return input.map(sortValue);
+			if (input && typeof input === 'object') {
+				return Object.keys(input).sort().reduce((acc: Record<string, any>, key) => {
+					acc[key] = sortValue(input[key]);
+					return acc;
+				}, {});
+			}
+			return input;
+		};
+		return JSON.stringify(sortValue(value));
+	};
+
+const loadLocalTopics = () => {
+	try {
+		const raw = localStorage.getItem(LOCAL_TOPICS_KEY);
+		if (!raw) return null;
+		const parsed = JSON.parse(raw);
+		if (!Array.isArray(parsed)) return null;
+		return parsed as Topic[];
+	} catch {
+		return null;
+	}
+};
+
+const saveLocalTopics = (topics: Topic[], activeTopicId: string) => {
+	try {
+		localStorage.setItem(LOCAL_TOPICS_KEY, JSON.stringify(topics));
+		localStorage.setItem(LOCAL_ACTIVE_TOPIC_KEY, activeTopicId);
+	} catch {
+		// ignore storage errors
+	}
+};
 
 function sortDerivatives(derivatives: Derivative[]): Derivative[] {
 	const order: Record<DerivativeType, number> = {
@@ -224,6 +268,7 @@ const LegendItem = ({ keys, description }: { keys: string; description: string }
 const App = () => {
 	const [topics, setTopics] = useState<Topic[]>([INITIAL_TOPIC]);
 	const [activeTopicId, setActiveTopicId] = useState(INITIAL_TOPIC.id);
+	const [isHydrated, setIsHydrated] = useState(false);
 
 	const { state: hState, setState: setHState, pushState, undo, redo, commitFrom, reset: resetHistory } = useUndo({
 		topic: INITIAL_TOPIC,
@@ -245,6 +290,13 @@ const App = () => {
 	const normalChangePendingRef = useRef(false);
 	const [normalYankPending, setNormalYankPending] = useState(false);
 	const normalYankPendingRef = useRef(false);
+	const [yankFlash, setYankFlash] = useState<{
+		cursorIdx: number;
+		derivIdx: number;
+		start: number;
+		end: number;
+	} | null>(null);
+	const yankFlashTimerRef = useRef<number | null>(null);
 	const [insertDirty, setInsertDirty] = useState(false);
 	const insertDirtyRef = useRef(false);
 	const insertSkipCommitRef = useRef(false);
@@ -289,11 +341,141 @@ const App = () => {
 	const [topicMenuIndex, setTopicMenuIndex] = useState(0);
 	const topicMenuIndexRef = useRef(0);
 	const [topicMenuEditingId, setTopicMenuEditingId] = useState<string | null>(null);
+	const [lastCopiedMarkdown, setLastCopiedMarkdown] = useState('');
+	const [toastMessage, setToastMessage] = useState<string | null>(null);
+	const [persistStatus, setPersistStatus] = useState<{
+		state: 'idle' | 'saving' | 'saved' | 'error' | 'mismatch';
+		message?: string;
+		at?: number;
+	}>(() => ({ state: 'idle' }));
+	const saveTimersRef = useRef<Record<string, number>>({});
+	const lastSavedRef = useRef<Record<string, string>>({});
+	const schemaRetryRef = useRef({ attempts: 0, timer: 0 as number | null });
 
 	const currentConcept = topic.concepts[cursorIdx];
 	const currentDeriv = (derivIdx >= 0 && currentConcept && currentConcept.derivatives.length > derivIdx)
 		? currentConcept.derivatives[derivIdx]
 		: null;
+	const userId = (user?.id || null) as string | null;
+	const userEmail = (user?.email || null) as string | null;
+	const persistMessage = persistStatus.message
+		?? (persistStatus.state === 'error' ? 'Unknown persistence error.' : undefined);
+
+	const refreshSchemaCache = async () => {
+		try {
+			const token = await (authClient as any).getJWTToken?.();
+			if (!token) return false;
+			const baseUrl = import.meta.env.VITE_NEON_DATA_API_URL as string | undefined;
+			if (!baseUrl) return false;
+			const url = `${baseUrl.replace(/\/$/, '')}/rpc/reload_schema_cache`;
+			const response = await fetch(url, {
+				method: 'POST',
+				headers: {
+					Authorization: `Bearer ${token}`,
+					'Content-Type': 'application/json'
+				},
+				body: '{}'
+			});
+			return response.ok;
+		} catch (error) {
+			console.error('Schema cache refresh failed', error);
+			return false;
+		}
+	};
+
+	const scheduleSchemaRetry = async () => {
+		const maxAttempts = 12;
+		if (schemaRetryRef.current.attempts >= maxAttempts) return;
+		schemaRetryRef.current.attempts += 1;
+		const attempt = schemaRetryRef.current.attempts;
+		if (schemaRetryRef.current.timer) window.clearTimeout(schemaRetryRef.current.timer);
+		const refreshed = await refreshSchemaCache();
+		const refreshNote = refreshed ? 'cache refresh requested' : 'cache refresh unavailable';
+		schemaRetryRef.current.timer = window.setTimeout(() => {
+			setIsHydrated(false);
+		}, 5000);
+		setPersistStatus({
+			state: 'error',
+			message: `Schema cache updating… retry ${attempt}/${maxAttempts} (${refreshNote}).`
+		});
+	};
+
+	const formatPersistError = (error: unknown) => {
+		if (!error) return 'Unknown persistence error.';
+		if (typeof error === 'string') return error;
+		const errorObj = error as { code?: string; message?: string; details?: string; hint?: string } | null;
+		if (errorObj?.code === 'PGRST205') {
+			return `Missing table engram_topics in schema cache. Ensure schema "${neonSchema}" is exposed and wait for cache refresh.`;
+		}
+		if (error instanceof Error) {
+			if (error.name === 'AuthRequiredError') return 'Auth token missing. Please sign in again.';
+			return error.message || 'Unexpected persistence error.';
+		}
+		try {
+			return JSON.stringify(error);
+		} catch {
+			return 'Unexpected persistence error.';
+		}
+	};
+
+	const queueSaveTopic = (nextTopic: Topic) => {
+		if (isE2E || !userId || !isHydrated) return;
+		const normalized = normalizeTopic(nextTopic);
+		const serialized = stableStringify(normalized);
+		if (lastSavedRef.current[normalized.id] === serialized) return;
+		const existingTimer = saveTimersRef.current[normalized.id];
+		if (existingTimer) window.clearTimeout(existingTimer);
+		saveTimersRef.current[normalized.id] = window.setTimeout(async () => {
+			try {
+				setPersistStatus({ state: 'saving', message: 'Saving to Neon…' });
+				const db = neon.schema(neonSchema);
+				await db.from('app_users').upsert({ id: userId, email: userEmail }, { onConflict: 'id' });
+				const { error } = await db.from('engram_topics').upsert({
+					id: normalized.id,
+					owner_id: userId,
+					title: normalized.title,
+					topic: normalized
+				}, { onConflict: 'id' });
+				if (error) throw error;
+				const { data: verifyData, error: verifyError } = await db
+					.from('engram_topics')
+					.select('topic')
+					.eq('id', normalized.id)
+					.eq('owner_id', userId)
+					.maybeSingle();
+				if (verifyError) throw verifyError;
+				const storedSerialized = stableStringify(verifyData?.topic ?? null);
+				if (storedSerialized !== serialized) {
+					setPersistStatus({ state: 'mismatch', message: 'Saved, but verification mismatch (JSON order/shape).' });
+					console.warn('Persistence mismatch', { expected: normalized, actual: verifyData?.topic });
+					return;
+				}
+				lastSavedRef.current[normalized.id] = serialized;
+				setPersistStatus({ state: 'saved', message: 'Saved to Neon', at: Date.now() });
+			} catch (error) {
+				console.error('Failed to save topic', error);
+				const message = formatPersistError(error);
+				setPersistStatus({ state: 'error', message });
+				const errorObj = error as { code?: string } | null;
+				if (errorObj?.code === 'PGRST205') scheduleSchemaRetry();
+			}
+		}, 400);
+	};
+
+	const deletePersistedTopic = async (topicId: string) => {
+		if (isE2E || !userId || !isHydrated) return;
+		const existingTimer = saveTimersRef.current[topicId];
+		if (existingTimer) window.clearTimeout(existingTimer);
+		delete saveTimersRef.current[topicId];
+		delete lastSavedRef.current[topicId];
+		try {
+			const db = neon.schema(neonSchema);
+			const { error } = await db.from('engram_topics').delete().eq('id', topicId).eq('owner_id', userId);
+			if (error) throw error;
+		} catch (error) {
+			console.error('Failed to delete topic', error);
+		}
+	};
 
 	const syncTopicDraft = (id: string, title: string) => {
 		setTopicDrafts(prev => ({ ...prev, [id]: title }));
@@ -320,11 +502,17 @@ const App = () => {
 		resetHistory({ topic: newTopic, cursorIdx: 0, derivIdx: -1 });
 		setTopicMenuIndex(Math.max(0, topics.length));
 		setTopicMenuEditingId(newTopic.id);
+		queueSaveTopic(newTopic);
 	};
 
 	const renameTopic = (id: string, title: string) => {
 		syncTopicDraft(id, title);
-		setTopics(prev => prev.map(item => (item.id === id ? { ...item, title } : item)));
+		setTopics(prev => prev.map(item => {
+			if (item.id !== id) return item;
+			const updated = { ...item, title };
+			queueSaveTopic(updated);
+			return updated;
+		}));
 		if (id === activeTopicId) {
 			setHState(prev => ({ ...prev, topic: { ...prev.topic, title } }));
 		}
@@ -351,6 +539,7 @@ const App = () => {
 			return next;
 		});
 		setTopicMenuEditingId(prev => (prev === id ? null : prev));
+		deletePersistedTopic(id);
 	};
 
 	const activeRef = useRef<HTMLDivElement>(null);
@@ -416,6 +605,7 @@ const App = () => {
 			setYankText(selected);
 			setYankBuffer(null);
 			setVisualAnchor(null);
+			showToast('Copied');
 			return;
 		}
 		if (visualAnchor) {
@@ -438,18 +628,94 @@ const App = () => {
 			setYankBuffer(selection);
 			setYankText(null);
 			setVisualAnchor(null);
+			showToast('Copied');
 			return;
 		}
 
 		if (derivIdx === -1) {
 			setYankBuffer([{ kind: 'concept', concept: currentConcept }]);
 			setYankText(null);
+			showToast('Copied');
 			return;
 		}
 		if (currentDeriv) {
 			setYankBuffer([{ kind: 'derivative', derivative: currentDeriv }]);
 			setYankText(null);
+			showToast('Copied');
 		}
+	};
+
+	const deleteVisualTextSelection = (enterInsert: boolean) => {
+		if (!currentConcept) return false;
+		if (!visualAnchor || visualAnchor.kind !== 'text' || typeof visualAnchor.charIndex !== 'number' || mode !== 'NORMAL') return false;
+		if (visualAnchor.cursorIdx !== cursorIdx || visualAnchor.derivIdx !== derivIdx) return false;
+		const baseText = derivIdx === -1 ? currentConcept.text : (currentDeriv?.text || '');
+		const cursorPos = normalCursorRef.current;
+		const start = Math.min(visualAnchor.charIndex, cursorPos);
+		const end = Math.max(visualAnchor.charIndex, cursorPos);
+		const newText = deleteRange(baseText, start, end + 1);
+		setVisualAnchor(null);
+		setKeyBuffer('');
+		if (enterInsert) {
+			applyChangeAndEnterInsert(newText, Math.min(start, newText.length));
+		} else {
+			applyTextChange(newText);
+			setCursor(Math.min(start, Math.max(0, newText.length - 1)));
+		}
+		return true;
+	};
+
+	const deleteVisualBlockSelection = (enterInsert: boolean) => {
+		if (!visualAnchor || visualAnchor.kind !== 'block') return false;
+		const items = buildFlatBlocks();
+		const anchorIndex = items.findIndex(
+			item => item.cursorIdx === visualAnchor.cursorIdx && item.derivIdx === visualAnchor.derivIdx
+		);
+		const currentIndex = items.findIndex(
+			item => item.cursorIdx === cursorIdx && item.derivIdx === derivIdx
+		);
+		if (anchorIndex === -1 || currentIndex === -1) return false;
+		const [startIdx, endIdx] = anchorIndex <= currentIndex
+			? [anchorIndex, currentIndex]
+			: [currentIndex, anchorIndex];
+		const selection = items.slice(startIdx, endIdx + 1);
+		const selectedConceptIds = new Set<string>();
+		const selectedDerivativeIds = new Set<string>();
+		selection.forEach(item => {
+			if (item.kind === 'concept') selectedConceptIds.add(item.concept.id);
+			else if (item.derivative) selectedDerivativeIds.add(item.derivative.id);
+		});
+		let nextConcepts = topic.concepts
+			.filter(concept => !selectedConceptIds.has(concept.id))
+			.map(concept => {
+				if (selectedConceptIds.has(concept.id)) return concept;
+				const nextDerivs = concept.derivatives.filter(deriv => !selectedDerivativeIds.has(deriv.id));
+				return nextDerivs.length === concept.derivatives.length
+					? concept
+					: { ...concept, derivatives: nextDerivs };
+			});
+		if (nextConcepts.length === 0) {
+			nextConcepts = [{ id: generateId(), text: '', derivatives: [] }];
+		}
+		const nextTopic = { ...topic, concepts: nextConcepts };
+		let nextCursorIdx = Math.min(cursorIdx, nextConcepts.length - 1);
+		let nextDerivIdx = derivIdx;
+		const nextConcept = nextConcepts[nextCursorIdx];
+		if (!nextConcept) {
+			nextCursorIdx = 0;
+			nextDerivIdx = -1;
+		} else if (nextDerivIdx >= nextConcept.derivatives.length) {
+			nextDerivIdx = -1;
+		}
+		updateTopic(nextTopic, nextCursorIdx, nextDerivIdx);
+		setVisualAnchor(null);
+		setKeyBuffer('');
+		if (enterInsert) {
+			setMode('INSERT');
+			setNormalCursor(0);
+			insertSkipCommitRef.current = true;
+		}
+		return true;
 	};
 
 	const deleteRange = (text: string, start: number, end: number) => {
@@ -524,6 +790,11 @@ const App = () => {
 		}
 	};
 
+	const showToast = (message: string) => {
+		setToastMessage(message);
+		setTimeout(() => setToastMessage(prev => (prev === message ? null : prev)), 1500);
+	};
+
 	const applyChangeAndEnterInsert = (text: string, nextCursor: number) => {
 		const newTopic = buildTopicWithText(text);
 		pushState({ topic: newTopic, cursorIdx, derivIdx });
@@ -542,6 +813,35 @@ const App = () => {
 			newTopic.concepts[cursorIdx].derivatives = newDerivs;
 		}
 		return newTopic;
+	};
+
+	const topicToMarkdown = (source: Topic) => {
+		const lines: string[] = [`# ${source.title}`];
+		source.concepts.forEach((concept, index) => {
+			lines.push('', `## ${index + 1}. ${concept.text || 'Empty concept'}`);
+			concept.derivatives.forEach((derivative) => {
+				const rawText = derivative.text && derivative.text.length > 0 ? derivative.text : 'Empty';
+				const textLines = rawText.split('\n');
+				if (derivative.type === 'ELABORATION') {
+					lines.push(...textLines);
+					return;
+				}
+				const prefix = derivative.type === 'PROBING' ? '?' : 'C';
+				lines.push(...textLines.map(line => `${prefix} ${line}`));
+			});
+		});
+		return lines.join('\n');
+	};
+
+	const handleCopyMarkdown = async () => {
+		const markdown = topicToMarkdown(topic);
+		setLastCopiedMarkdown(markdown);
+		try {
+			await navigator.clipboard.writeText(markdown);
+		} catch {
+			// ignore clipboard errors
+		}
+		showToast('Markdown copied');
 	};
 
 	const commitToHistory = () => {
@@ -784,12 +1084,18 @@ const App = () => {
 				const text = derivIdx === -1 ? currentConcept.text : (currentDeriv?.text || '');
 				if (e.key === 'Escape') {
 					if (visualAnchor) { setVisualAnchor(null); return; }
-					if (keyBuffer === ' ') { setKeyBuffer(''); return; }
+					if (keyBuffer) { setKeyBuffer(''); }
 					if (normalYankPendingRef.current) { normalYankPendingRef.current = false; setNormalYankPending(false); return; }
 					if (normalDeletePendingRef.current) { normalDeletePendingRef.current = false; setNormalDeletePending(false); return; }
 					if (normalChangePendingRef.current) { normalChangePendingRef.current = false; setNormalChangePending(false); return; }
 					setMode('BLOCK');
 					return;
+				}
+				if (visualAnchor && e.key === 'd') {
+					if (deleteVisualTextSelection(false)) return;
+				}
+				if (visualAnchor && e.key === 'c') {
+					if (deleteVisualTextSelection(true)) return;
 				}
 				if (normalYankPendingRef.current) {
 					const cursorPos = normalCursorRef.current;
@@ -797,20 +1103,25 @@ const App = () => {
 						const end = findNextWord(text, cursorPos);
 						setYankText(text.slice(cursorPos, end));
 						setYankBuffer(null);
+						if (end > cursorPos) triggerYankFlash(cursorPos, end - 1);
 					} else if (e.key === 'e') {
 						const end = Math.min(text.length, findEndWord(text, cursorPos) + 1);
 						setYankText(text.slice(cursorPos, end));
 						setYankBuffer(null);
+						if (end > cursorPos) triggerYankFlash(cursorPos, end - 1);
 					} else if (e.key === 'b') {
 						const start = findPrevWord(text, cursorPos);
 						setYankText(text.slice(start, cursorPos));
 						setYankBuffer(null);
+						if (cursorPos > start) triggerYankFlash(start, cursorPos - 1);
 					} else if (e.key === 'y') {
 						setYankText(text);
 						setYankBuffer(null);
+						if (text.length > 0) triggerYankFlash(0, text.length - 1);
 					}
 					normalYankPendingRef.current = false;
 					setNormalYankPending(false);
+					setKeyBuffer('');
 					return;
 				}
 				if (normalDeletePendingRef.current) {
@@ -822,6 +1133,7 @@ const App = () => {
 						setCursor(Math.min(cursorPos, newText.length));
 						normalDeletePendingRef.current = false;
 						setNormalDeletePending(false);
+						setKeyBuffer('');
 						return;
 					}
 					if (e.key === 'e') {
@@ -831,6 +1143,7 @@ const App = () => {
 						setCursor(Math.min(cursorPos, newText.length));
 						normalDeletePendingRef.current = false;
 						setNormalDeletePending(false);
+						setKeyBuffer('');
 						return;
 					}
 					if (e.key === 'b') {
@@ -840,6 +1153,7 @@ const App = () => {
 						setCursor(start);
 						normalDeletePendingRef.current = false;
 						setNormalDeletePending(false);
+						setKeyBuffer('');
 						return;
 					}
 					if (e.key === 'd') {
@@ -848,10 +1162,12 @@ const App = () => {
 						setCursor(Math.min(nextCursor, newText.length));
 						normalDeletePendingRef.current = false;
 						setNormalDeletePending(false);
+						setKeyBuffer('');
 						return;
 					}
 					normalDeletePendingRef.current = false;
 					setNormalDeletePending(false);
+					setKeyBuffer('');
 					return;
 				}
 				if (normalChangePendingRef.current) {
@@ -862,6 +1178,7 @@ const App = () => {
 						applyChangeAndEnterInsert(newText, Math.min(cursorPos, newText.length));
 						normalChangePendingRef.current = false;
 						setNormalChangePending(false);
+						setKeyBuffer('');
 						return;
 					}
 					if (e.key === 'e') {
@@ -870,6 +1187,7 @@ const App = () => {
 						applyChangeAndEnterInsert(newText, Math.min(cursorPos, newText.length));
 						normalChangePendingRef.current = false;
 						setNormalChangePending(false);
+						setKeyBuffer('');
 						return;
 					}
 					if (e.key === 'b') {
@@ -878,6 +1196,7 @@ const App = () => {
 						applyChangeAndEnterInsert(newText, start);
 						normalChangePendingRef.current = false;
 						setNormalChangePending(false);
+						setKeyBuffer('');
 						return;
 					}
 					if (e.key === 'c') {
@@ -885,10 +1204,12 @@ const App = () => {
 						applyChangeAndEnterInsert(newText, Math.min(nextCursor, newText.length));
 						normalChangePendingRef.current = false;
 						setNormalChangePending(false);
+						setKeyBuffer('');
 						return;
 					}
 					normalChangePendingRef.current = false;
 					setNormalChangePending(false);
+					setKeyBuffer('');
 					return;
 				}
 				if (e.key === ' ') { setKeyBuffer(' '); return; }
@@ -903,6 +1224,7 @@ const App = () => {
 					if (e.key === 'f') { setKeyBuffer(''); handleAnkify(); return; }
 					if (e.key === 'g') { setKeyBuffer(''); handleGenerate(); return; }
 					if (e.key === 'a') { setKeyBuffer(''); setTopicMenuEditingId(null); setIsDocumentSwitcherOpen(true); return; }
+					if (e.key === 'c') { setKeyBuffer(''); handleCopyMarkdown(); return; }
 					setKeyBuffer('');
 					return;
 				}
@@ -910,11 +1232,12 @@ const App = () => {
 					if (visualAnchor) { yankSelection(); return; }
 					normalYankPendingRef.current = true;
 					setNormalYankPending(true);
+					setKeyBuffer('y');
 					return;
 				}
 				if (e.key === 'p') { pasteYanked(); return; }
-				if (e.key === 'd') { normalDeletePendingRef.current = true; setNormalDeletePending(true); return; }
-				if (e.key === 'c') { normalChangePendingRef.current = true; setNormalChangePending(true); return; }
+				if (e.key === 'd') { normalDeletePendingRef.current = true; setNormalDeletePending(true); setKeyBuffer('d'); return; }
+				if (e.key === 'c') { normalChangePendingRef.current = true; setNormalChangePending(true); setKeyBuffer('c'); return; }
 
 				if (e.key === '/') { setIsSearching(true); setSearchQuery(''); return; }
 				if (e.key === 'n') { navigateSearch(lastSearchQuery, false); return; }
@@ -974,8 +1297,15 @@ const App = () => {
 					));
 					return;
 				}
+				if (visualAnchor && e.key === 'd') {
+					if (deleteVisualBlockSelection(false)) return;
+				}
+				if (visualAnchor && e.key === 'c') {
+					if (deleteVisualBlockSelection(true)) return;
+				}
 				if (keyBuffer === ' ') {
 					if (e.key === 'a') { setKeyBuffer(''); setTopicMenuEditingId(null); setIsDocumentSwitcherOpen(true); return; }
+					if (e.key === 'c') { setKeyBuffer(''); handleCopyMarkdown(); return; }
 					setKeyBuffer('');
 					return;
 				}
@@ -1211,8 +1541,122 @@ const App = () => {
 	}, [user?.name, user?.displayName, user?.email]);
 
 	useEffect(() => {
+		if (isE2E) return;
+		if (!import.meta.env.VITE_NEON_AUTH_URL || !import.meta.env.VITE_NEON_DATA_API_URL) {
+			setPersistStatus({ state: 'error', message: 'Missing Neon env vars.' });
+			return;
+		}
+		if (!userId) {
+			setPersistStatus({ state: 'error', message: 'Not signed in. Persistence disabled.' });
+			return;
+		}
+		if (!isHydrated) {
+			setPersistStatus({ state: 'idle', message: 'Loading topics…' });
+		}
+	}, [isE2E, userId, isHydrated]);
+
+	useEffect(() => {
+		if (!isE2E) return;
+		setPersistStatus({ state: 'saved', message: 'Local persistence (E2E)' });
+	}, [isE2E]);
+
+	useEffect(() => {
+		let isActive = true;
+		const hydrateTopics = async () => {
+			if (isHydrated) return;
+			if (isE2E) {
+				const stored = loadLocalTopics();
+				const activeId = localStorage.getItem(LOCAL_ACTIVE_TOPIC_KEY);
+				const normalized = (stored && stored.length)
+					? stored.map(normalizeTopic)
+					: [createEmptyTopic('Untitled Topic')];
+				const nextActive = normalized.find(item => item.id === activeId) || normalized[0];
+				if (!isActive) return;
+				setTopics(normalized);
+				setActiveTopicId(nextActive.id);
+				setTopicDrafts(normalized.reduce((acc, item) => ({ ...acc, [item.id]: item.title }), {}));
+				resetHistory({ topic: nextActive, cursorIdx: 0, derivIdx: -1 });
+				if (!stored || stored.length === 0) saveLocalTopics(normalized, nextActive.id);
+				setIsHydrated(true);
+				return;
+			}
+			if (!userId) return;
+			try {
+				const db = neon.schema(neonSchema);
+				await db.from('app_users').upsert({ id: userId, email: userEmail }, { onConflict: 'id' });
+				const { data, error } = await db
+					.from('engram_topics')
+					.select('id,title,topic,updated_at')
+					.eq('owner_id', userId)
+					.order('updated_at', { ascending: false });
+				if (error) throw error;
+				const normalized = (data ?? []).map((row: any) => {
+					const raw = row?.topic ?? {};
+					const base: Topic = typeof raw === 'object' && raw !== null
+						? raw
+						: { id: row.id, title: row.title ?? 'Untitled Topic', concepts: [] };
+					return normalizeTopic({ ...base, id: row.id, title: row.title ?? base.title ?? 'Untitled Topic' });
+				});
+				const nextTopics = normalized.length ? normalized : [createEmptyTopic('Untitled Topic')];
+				const nextActive = nextTopics[0];
+				if (!isActive) return;
+				setTopics(nextTopics);
+				setActiveTopicId(nextActive.id);
+				setTopicDrafts(nextTopics.reduce((acc, item) => ({ ...acc, [item.id]: item.title }), {}));
+				resetHistory({ topic: nextActive, cursorIdx: 0, derivIdx: -1 });
+				setIsHydrated(true);
+				setPersistStatus({ state: 'idle', message: 'Ready to save.' });
+				if (normalized.length === 0) {
+					await db.from('engram_topics').upsert({
+						id: nextActive.id,
+						owner_id: userId,
+						title: nextActive.title,
+						topic: nextActive
+					}, { onConflict: 'id' });
+				}
+			} catch (error) {
+				console.error('Failed to load topics', error);
+				if (!isActive) return;
+				const message = formatPersistError(error);
+				setPersistStatus({ state: 'error', message });
+				const errorObj = error as { code?: string } | null;
+				if (errorObj?.code === 'PGRST205') {
+					scheduleSchemaRetry();
+					return;
+				}
+				setIsHydrated(true);
+			}
+		};
+		hydrateTopics();
+		return () => {
+			isActive = false;
+		};
+	}, [isHydrated, userId, userEmail]);
+
+	useEffect(() => {
 		normalCursorRef.current = normalCursor;
 	}, [normalCursor]);
+
+	useEffect(() => {
+		if (!isHydrated || !isE2E) return;
+		saveLocalTopics(topics, activeTopicId);
+	}, [topics, activeTopicId, isHydrated]);
+
+	useEffect(() => {
+		if (!isHydrated) return;
+		queueSaveTopic(hState.topic);
+	}, [hState.topic, isHydrated]);
+
+	useEffect(() => {
+		return () => {
+			Object.values(saveTimersRef.current).forEach(timer => window.clearTimeout(timer as number));
+			saveTimersRef.current = {};
+			if (schemaRetryRef.current.timer) {
+				window.clearTimeout(schemaRetryRef.current.timer);
+				schemaRetryRef.current.timer = null;
+			}
+		};
+	}, []);
 
 	useEffect(() => {
 		hStateRef.current = hState;
@@ -1304,6 +1748,25 @@ const App = () => {
 		}
 	}, [mode, normalCursor]);
 
+	useEffect(() => {
+		return () => {
+			if (yankFlashTimerRef.current !== null) {
+				window.clearTimeout(yankFlashTimerRef.current);
+			}
+		};
+	}, []);
+
+	const triggerYankFlash = (start: number, end: number) => {
+		setYankFlash({ cursorIdx, derivIdx, start, end });
+		if (yankFlashTimerRef.current !== null) {
+			window.clearTimeout(yankFlashTimerRef.current);
+		}
+		yankFlashTimerRef.current = window.setTimeout(() => {
+			setYankFlash(null);
+			yankFlashTimerRef.current = null;
+		}, 180);
+	};
+
 	const renderTextWithCursor = (text: string, isFocused: boolean, block: { cursorIdx: number; derivIdx: number }) => {
 		const sQuery = isSearching ? searchQuery : lastSearchQuery;
 		const hasSearch = !!sQuery;
@@ -1316,6 +1779,12 @@ const App = () => {
 			mode === 'NORMAL';
 		const visualStart = isVisualText ? Math.min(visualAnchor!.charIndex!, normalCursor) : -1;
 		const visualEnd = isVisualText ? Math.max(visualAnchor!.charIndex!, normalCursor) : -1;
+		const isYankFlash =
+			!!yankFlash &&
+			yankFlash.cursorIdx === block.cursorIdx &&
+			yankFlash.derivIdx === block.derivIdx;
+		const yankFlashStart = isYankFlash ? yankFlash!.start : -1;
+		const yankFlashEnd = isYankFlash ? yankFlash!.end : -1;
 
 		const matchClass = isFocused
 			? "bg-[#ff9e64] text-[#1a1b26]"
@@ -1362,9 +1831,11 @@ const App = () => {
 					{chars.map((char, i) => {
 						const isMatch = ranges.some(r => i >= r.start && i < r.end);
 						const isSelected = isVisualText && i >= visualStart && i <= visualEnd;
+						const isFlash = isYankFlash && i >= yankFlashStart && i <= yankFlashEnd;
 						let className = "";
 						if (isMatch) className += matchClass + " ";
 						if (isSelected) className += "bg-[#bb9af7] text-[#1a1b26] ";
+						if (isFlash) className += "bg-[#7aa2f7] text-[#1a1b26] ";
 						if (i === normalCursor) className += "char-cursor ";
 
 						if (char === '\n' && i === normalCursor) {
@@ -1450,7 +1921,9 @@ const App = () => {
 			return (
 				<div className="flex flex-col gap-2">
 					<LegendItem keys="v" description="Exit Visual selection" />
-					<LegendItem keys="y" description="Yank the selected blocks" />
+					<LegendItem keys="y" description="Yank the selection" />
+					<LegendItem keys="d" description="Delete the selection" />
+					<LegendItem keys="c" description="Change the selection" />
 					<LegendItem keys="Esc" description="Cancel selection" />
 				</div>
 			);
@@ -1462,6 +1935,7 @@ const App = () => {
 					<LegendItem keys="Space + f" description="Convert all clozes into Anki cards" />
 					<LegendItem keys="Space + g" description="AI actions for the current block" />
 					<LegendItem keys="Space + a" description="Open topic switcher" />
+					<LegendItem keys="Space + c" description="Copy topic as Markdown" />
 					<LegendItem keys="Esc" description="Cancel leader chord" />
 				</div>
 			);
@@ -1482,6 +1956,39 @@ const App = () => {
 		);
 
 		if (mode === 'NORMAL') {
+			if (keyBuffer === 'y') {
+				return (
+					<div className="flex flex-col gap-2">
+						<LegendItem keys="y w" description="Yank to next word" />
+						<LegendItem keys="y e" description="Yank to end of word" />
+						<LegendItem keys="y b" description="Yank to previous word" />
+						<LegendItem keys="y y" description="Yank the current line" />
+						<LegendItem keys="Esc" description="Cancel yank chord" />
+					</div>
+				);
+			}
+			if (keyBuffer === 'd') {
+				return (
+					<div className="flex flex-col gap-2">
+						<LegendItem keys="d w" description="Delete to next word" />
+						<LegendItem keys="d e" description="Delete to end of word" />
+						<LegendItem keys="d b" description="Delete to previous word" />
+						<LegendItem keys="d d" description="Delete the current line" />
+						<LegendItem keys="Esc" description="Cancel delete chord" />
+					</div>
+				);
+			}
+			if (keyBuffer === 'c') {
+				return (
+					<div className="flex flex-col gap-2">
+						<LegendItem keys="c w" description="Change to next word" />
+						<LegendItem keys="c e" description="Change to end of word" />
+						<LegendItem keys="c b" description="Change to previous word" />
+						<LegendItem keys="c c" description="Change the current line" />
+						<LegendItem keys="Esc" description="Cancel change chord" />
+					</div>
+				);
+			}
 			return (
 				<div className="flex flex-col gap-2">
 					<LegendItem keys="Esc" description="Return to Block mode" />
@@ -1566,6 +2073,22 @@ const App = () => {
 					>
 						{topic.title}
 					</h1>
+					{persistStatus.state !== 'saved' && (
+						<div className="flex items-center gap-2 text-[9px] font-semibold text-[#94a0c6]">
+							<span
+								className="rounded-full px-2 py-0.5 border border-[#2a2f45] bg-[#16161e]"
+								data-testid="persistence-status"
+								title={persistMessage}
+							>
+								DB: {persistStatus.state.toUpperCase()}
+							</span>
+							{persistMessage && (
+								<span className="opacity-70" data-testid="persistence-message">
+									{persistMessage}
+								</span>
+							)}
+						</div>
+					)}
 				</div>
 
 				<div className="flex items-center gap-3 justify-end min-w-[120px]">
@@ -1708,21 +2231,28 @@ const App = () => {
 															/>
 														)}
 														<div
-															className="break-words whitespace-pre-wrap min-h-[1.5em] text-[#a9b1d6]"
+															className={`break-words min-h-[1.5em] text-[#a9b1d6] ${isElaboration && mode === 'BLOCK' && deriv.text ? 'engram-markdown whitespace-normal' : 'whitespace-pre-wrap'}`}
 															style={{
 																overflowWrap: 'anywhere',
 																wordBreak: 'break-word',
 																overflow: isElaboration && mode === 'BLOCK' && cursorIdx !== cIdx ? 'hidden' : 'visible',
-																display: isElaboration && mode === 'BLOCK' && cursorIdx !== cIdx ? '-webkit-box' : 'block',
-																WebkitLineClamp: isElaboration && mode === 'BLOCK' && cursorIdx !== cIdx ? 3 : 'unset',
-																WebkitBoxOrient: isElaboration && mode === 'BLOCK' && cursorIdx !== cIdx ? 'vertical' : 'unset'
+																display: 'block',
+																maxHeight: isElaboration && mode === 'BLOCK' && cursorIdx !== cIdx ? '4.5em' : 'none'
 															}}
 															data-testid={`derivative-text-${cIdx}-${dIdx}`}
 														>
-															{renderTextWithCursor(
-																deriv.text,
-																cursorIdx === cIdx && derivIdx === dIdx,
-																{ cursorIdx: cIdx, derivIdx: dIdx }
+															{isElaboration && mode === 'BLOCK' && deriv.text ? (
+																<ReactMarkdown
+																	remarkPlugins={[remarkGfm]}
+																>
+																	{deriv.text}
+																</ReactMarkdown>
+															) : (
+																renderTextWithCursor(
+																	deriv.text,
+																	cursorIdx === cIdx && derivIdx === dIdx,
+																	{ cursorIdx: cIdx, derivIdx: dIdx }
+																)
 															)}
 														</div>
 													</div>
@@ -1764,6 +2294,14 @@ const App = () => {
 					<input autoFocus value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} className="bg-transparent outline-none text-[#c0caf5] w-full mono" placeholder="Search..." />
 				</div>
 			)}
+
+			{toastMessage && (
+				<div className="fixed bottom-6 left-1/2 z-50 -translate-x-1/2 rounded-full border border-[#2a2f45] bg-[#1f2335]/95 px-4 py-2 text-[11px] font-semibold text-[#c0caf5] shadow-[0_0_18px_rgba(10,12,20,0.85)]" data-testid="toast">
+					{toastMessage}
+				</div>
+			)}
+
+			<div data-testid="markdown-copy" style={{ display: 'none' }}>{lastCopiedMarkdown}</div>
 
 			<div className={`p-1 flex justify-between items-center text-[10px] font-bold uppercase text-[#1a1b26] transition-colors duration-200 ${getStatusColor()}`}>
 				<div className="flex gap-4 px-2">

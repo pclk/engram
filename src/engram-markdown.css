@@ -1,0 +1,61 @@
+.engram-markdown {
+	font-family: 'JetBrains Mono', monospace;
+	color: #a9b1d6;
+}
+
+.engram-markdown p {
+	margin: 0.25rem 0;
+}
+
+.engram-markdown ul,
+.engram-markdown ol {
+	margin: 0.25rem 0 0.25rem 1.25rem;
+	padding-left: 0.75rem;
+}
+
+.engram-markdown ul {
+	list-style: disc;
+}
+
+.engram-markdown ol {
+	list-style: decimal;
+}
+
+.engram-markdown li {
+	margin: 0.15rem 0;
+}
+
+.engram-markdown strong {
+	color: #c0caf5;
+	font-weight: 700;
+}
+
+.engram-markdown em {
+	font-style: italic;
+	color: #c0caf5;
+}
+
+.engram-markdown code {
+	font-family: 'JetBrains Mono', monospace;
+	font-size: 0.85em;
+	background: #1f2335;
+	border: 1px solid #2a2f45;
+	border-radius: 0.35rem;
+	padding: 0.05rem 0.25rem;
+	color: #9ece6a;
+}
+
+.engram-markdown pre {
+	background: #1f2335;
+	border: 1px solid #2a2f45;
+	border-radius: 0.5rem;
+	padding: 0.5rem 0.75rem;
+	overflow-x: auto;
+}
+
+.engram-markdown pre code {
+	background: transparent;
+	border: none;
+	padding: 0;
+	color: inherit;
+}

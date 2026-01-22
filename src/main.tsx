@@ -4,6 +4,7 @@ import { BrowserRouter } from 'react-router-dom';
 import { NeonAuthUIProvider } from '@neondatabase/neon-js/auth/react/ui';
 import '@neondatabase/neon-js/ui/css';
 import './auth-theme.css';
+import './engram-markdown.css';
 import App from './App';
 import { authClient } from './lib/auth';
 import { toast as sonnerToast } from 'sonner';

@@ -16,7 +16,14 @@ const waitForNoText = async (page, text, timeout = 10000) => {
 
 const getConceptText = async (page) => page.$eval('[data-testid="concept-text-0"]', el => {
 	const raw = el.textContent ?? '';
-	return raw.replace(/\u00a0/g, '').trim();
+	const cleaned = raw.replace(/\u00a0/g, '').trim();
+	return cleaned === 'Empty...' ? '' : cleaned;
+});
+
+const getElaborationText = async (page) => page.$eval('[data-derivative-type="ELABORATION"] [data-testid^="derivative-text-"]', el => {
+	const raw = el.textContent ?? '';
+	const cleaned = raw.replace(/\u00a0/g, '').trim();
+	return cleaned === 'Empty...' ? '' : cleaned;
 });
 
 const expectConceptText = async (page, expected, timeout = 10000) => {
@@ -28,6 +35,17 @@ const expectConceptText = async (page, expected, timeout = 10000) => {
 		await new Promise(resolve => setTimeout(resolve, 100));
 	}
 	throw new Error(`Expected concept text to be "${expected}", got "${last}"`);
+};
+
+const expectElaborationText = async (page, expected, timeout = 10000) => {
+	const start = Date.now();
+	let last = '';
+	while (Date.now() - start < timeout) {
+		last = await getElaborationText(page);
+		if (last === expected) return;
+		await new Promise(resolve => setTimeout(resolve, 100));
+	}
+	throw new Error(`Expected elaboration text to be "${expected}", got "${last}"`);
 };
 
 const isWordChar = (char) => /[a-zA-Z0-9_]/.test(char);
@@ -74,9 +92,20 @@ export async function run({ page, baseUrl }) {
 	await page.waitForSelector('[data-testid="concept-text-0"]');
 	await page.click('body');
 
-	const originalText = await getConceptText(page);
+	let originalText = await getConceptText(page);
 	if (!originalText) {
-		throw new Error('Expected initial concept text to be present.');
+		await page.keyboard.press('i');
+		await waitForText(page, 'NORMAL');
+		await page.keyboard.press('i');
+		await page.keyboard.type('Baseline text');
+		await page.keyboard.press('Escape');
+		await waitForText(page, 'NORMAL');
+		await page.keyboard.press('Escape');
+		await waitForText(page, 'BLOCK - CONCEPT');
+		originalText = await getConceptText(page);
+		if (!originalText) {
+			throw new Error('Expected initial concept text to be present.');
+		}
 	}
 
 	await page.keyboard.press('v');
@@ -91,7 +120,9 @@ export async function run({ page, baseUrl }) {
 	await page.keyboard.type('Test ');
 	await page.keyboard.press('Escape');
 	await waitForText(page, 'NORMAL');
-	const expectedInsert = `Test ${originalText}`;
+	const expectedInsert = originalText
+		? `Test ${originalText}`
+		: 'Test';
 	await expectConceptText(page, expectedInsert);
 	let textAfterInsert = await getConceptText(page);
 	if (textAfterInsert !== expectedInsert) {
@@ -137,8 +168,8 @@ export async function run({ page, baseUrl }) {
 	await page.keyboard.press('w');
 	await page.keyboard.type('Energy ');
 	await page.keyboard.press('Escape');
-	const afterFirstWordRemoved = originalText.replace(/^\S+\s+/, '');
-	const expectedChange = `Energy ${afterFirstWordRemoved}`;
+	const afterFirstWordRemoved = originalText ? originalText.replace(/^\S+\s+/, '') : '';
+	const expectedChange = afterFirstWordRemoved ? `Energy ${afterFirstWordRemoved}` : 'Energy';
 	await expectConceptText(page, expectedChange);
 	const textAfterChange = await getConceptText(page);
 	if (textAfterChange !== expectedChange) {
@@ -224,16 +255,26 @@ export async function run({ page, baseUrl }) {
 	await page.keyboard.press('Escape');
 	await waitForNoText(page, 'CHORD:');
 
+	await page.keyboard.press(' ');
+	await page.keyboard.press('c');
+	const copiedMarkdown = await page.$eval('[data-testid="markdown-copy"]', el => el.textContent ?? '');
+	if (!copiedMarkdown.includes('#')) {
+		throw new Error('Expected markdown copy to include a title heading.');
+	}
+	if (!copiedMarkdown.includes(originalText)) {
+		throw new Error('Expected markdown copy to include the current concept text.');
+	}
+
 	await page.keyboard.press('Escape');
 	await page.keyboard.press('Escape');
 	await page.keyboard.press('l');
 	await page.keyboard.press('o');
 	await page.keyboard.press('e');
 	await page.waitForSelector('textarea');
-	await page.type('textarea', 'Line1\nLine2\nLine3\nLine4');
+	await page.type('textarea', '- item 1\n- item 2\n- item 3\n- item 4');
 	const elaborationValue = await page.$eval('textarea', el => el.value ?? '');
-	if (!elaborationValue.includes('Line4')) {
-		throw new Error('Expected elaboration textarea to include Line4.');
+	if (!elaborationValue.includes('item 4')) {
+		throw new Error('Expected elaboration textarea to include item 4.');
 	}
 	await page.keyboard.press('Escape');
 	await page.keyboard.press('Escape');
@@ -247,8 +288,8 @@ export async function run({ page, baseUrl }) {
 	}));
 
 	const focusedMetrics = await getElaborationMetrics();
-	if (!focusedMetrics.text.includes('Line4')) {
-		throw new Error('Expected elaboration to include Line4 before moving away.');
+	if (!focusedMetrics.text.includes('item 4')) {
+		throw new Error('Expected elaboration to include item 4 before moving away.');
 	}
 
 	await page.keyboard.press('o');
@@ -262,12 +303,70 @@ export async function run({ page, baseUrl }) {
 	}
 	await page.keyboard.press('k');
 	const fullMetrics = await getElaborationMetrics();
-	if (!fullMetrics.text.includes('Line4')) {
+	if (!fullMetrics.text.includes('item 4')) {
 		throw new Error('Expected elaboration to show full text when concept is focused.');
 	}
 	if (fullMetrics.scrollHeight > fullMetrics.clientHeight) {
 		throw new Error('Expected elaboration to be unclamped when concept is focused.');
 	}
+
+	await page.keyboard.press('l');
+	await waitForText(page, 'BLOCK - DERIVATIVE');
+	await page.waitForSelector('[data-derivative-type="ELABORATION"] [data-testid^="derivative-text-"]');
+	await page.keyboard.press('i');
+	await waitForText(page, 'NORMAL');
+	const cursorVisible = await page.$eval('[data-derivative-type="ELABORATION"] [data-testid^="derivative-text-"]', el => !!el.querySelector('.char-cursor'));
+	if (!cursorVisible) {
+		throw new Error('Expected normal-mode cursor to be visible inside elaboration derivative.');
+	}
+
+	await page.keyboard.press('c');
+	await page.keyboard.press('c');
+	await page.keyboard.type('Alpha beta gamma');
+	await page.keyboard.press('Escape');
+	await waitForText(page, 'NORMAL');
+	const baseElaborationText = await getElaborationText(page);
+	if (!baseElaborationText || !baseElaborationText.startsWith('Alpha')) {
+		throw new Error(`Expected elaboration baseline text to start with "Alpha", got "${baseElaborationText}"`);
+	}
+
+	await page.keyboard.press('0');
+	await page.keyboard.press('d');
+	await page.keyboard.press('w');
+	const afterDeleteWord = baseElaborationText.replace(/^\S+\s+/, '');
+	await expectElaborationText(page, afterDeleteWord);
+	await page.keyboard.press('Escape');
+	await page.keyboard.press('u');
+	await page.keyboard.press('i');
+	await waitForText(page, 'NORMAL');
+	const afterUndoText = await getElaborationText(page);
+	if (afterUndoText !== baseElaborationText && afterUndoText !== afterDeleteWord) {
+		throw new Error(`Unexpected elaboration text after undo: "${afterUndoText}"`);
+	}
+	await page.keyboard.press('r');
+	await expectElaborationText(page, afterDeleteWord);
+
+	await page.keyboard.press('0');
+	await page.keyboard.press('c');
+	await page.keyboard.press('w');
+	await page.keyboard.type('Omega ');
+	await page.keyboard.press('Escape');
+	const afterDeleteTail = afterDeleteWord.replace(/^\S+\s+/, '');
+	const afterChangeWord = afterDeleteTail ? `Omega ${afterDeleteTail}` : 'Omega';
+	await expectElaborationText(page, afterChangeWord);
+
+	await page.keyboard.press('0');
+	await page.keyboard.press('y');
+	await page.keyboard.press('y');
+	await page.keyboard.press('p');
+	await expectElaborationText(page, `${afterChangeWord}${afterChangeWord}`);
+	await page.keyboard.press('u');
+	const afterUndoYank = await getElaborationText(page);
+	if (afterUndoYank !== afterChangeWord && afterUndoYank !== `${afterChangeWord}${afterChangeWord}`) {
+		throw new Error(`Unexpected elaboration text after yank undo: "${afterUndoYank}"`);
+	}
+	await page.keyboard.press('Escape');
+	await waitForText(page, 'BLOCK - DERIVATIVE');
 
 	await page.keyboard.press('/');
 	await page.waitForSelector('input[placeholder="Search..."]', { timeout: 10000 });
@@ -275,7 +374,6 @@ export async function run({ page, baseUrl }) {
 	await page.waitForSelector('input[placeholder="Search..."]', { hidden: true, timeout: 10000 });
 
 	await page.keyboard.press('Escape');
-	await waitForText(page, 'BLOCK - CONCEPT');
 
 	await page.keyboard.press('h');
 	await page.keyboard.press('i');
