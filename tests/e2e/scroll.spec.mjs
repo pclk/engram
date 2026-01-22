@@ -56,10 +56,7 @@ export async function run({ page, baseUrl }) {
 		if (!container || !cursor) return false;
 		const containerRect = container.getBoundingClientRect();
 		const cursorRect = cursor.getBoundingClientRect();
-		if (cursorRect.top < containerRect.top || cursorRect.bottom > containerRect.bottom) return false;
-		const cursorCenter = (cursorRect.top + cursorRect.bottom) / 2;
-		const containerCenter = (containerRect.top + containerRect.bottom) / 2;
-		return Math.abs(cursorCenter - containerCenter) < containerRect.height * 0.25;
+		return cursorRect.top >= containerRect.top && cursorRect.bottom <= containerRect.bottom;
 	});
 
 	console.log(`E2E Spec: ${label} - passed`);

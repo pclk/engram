@@ -26,6 +26,12 @@ const getElaborationText = async (page) => page.$eval('[data-derivative-type="EL
 	return cleaned === 'Empty...' ? '' : cleaned;
 });
 
+const getBlockMetrics = async (page, selector) => page.$eval(selector, el => ({
+	text: el.textContent ?? '',
+	scrollHeight: el.scrollHeight,
+	clientHeight: el.clientHeight
+}));
+
 const expectConceptText = async (page, expected, timeout = 10000) => {
 	const start = Date.now();
 	let last = '';
@@ -278,14 +284,20 @@ export async function run({ page, baseUrl }) {
 	}
 	await page.keyboard.press('Escape');
 	await page.keyboard.press('Escape');
+	await page.keyboard.press('l');
+	await waitForText(page, 'BLOCK - DERIVATIVE');
+	await page.keyboard.press('o');
+	await page.keyboard.press('p');
+	await page.waitForSelector('textarea');
+	await page.type('textarea', '- probe 1\n- probe 2\n- probe 3\n- probe 4');
+	await page.keyboard.press('Escape');
+	await page.keyboard.press('Escape');
 	await page.keyboard.press('h');
 	await page.waitForSelector('[data-derivative-type="ELABORATION"] [data-testid^="derivative-text-"]');
 
-	const getElaborationMetrics = async () => page.$eval('[data-derivative-type="ELABORATION"] [data-testid^="derivative-text-"]', el => ({
-		text: el.textContent ?? '',
-		scrollHeight: el.scrollHeight,
-		clientHeight: el.clientHeight
-	}));
+	const getElaborationMetrics = async () => getBlockMetrics(page, '[data-derivative-type="ELABORATION"] [data-testid^="derivative-text-"]');
+	const getProbingMetrics = async () => getBlockMetrics(page, '[data-derivative-type="PROBING"] [data-testid^="derivative-text-"]');
+	const getConceptMetrics = async (index) => getBlockMetrics(page, `[data-testid="concept-text-${index}"]`);
 
 	const focusedMetrics = await getElaborationMetrics();
 	if (!focusedMetrics.text.includes('item 4')) {
@@ -293,13 +305,17 @@ export async function run({ page, baseUrl }) {
 	}
 
 	await page.keyboard.press('o');
-	await page.keyboard.type('Second concept');
+	await page.keyboard.type('- second concept 1\n- second concept 2\n- second concept 3\n- second concept 4');
 	await page.keyboard.press('Escape');
 	await page.keyboard.press('Escape');
 	await waitForText(page, 'BLOCK - CONCEPT');
 	const trimmedMetrics = await getElaborationMetrics();
 	if (trimmedMetrics.scrollHeight <= trimmedMetrics.clientHeight) {
 		throw new Error('Expected elaboration to clamp to 3 lines when not focused.');
+	}
+	const trimmedProbingMetrics = await getProbingMetrics();
+	if (trimmedProbingMetrics.scrollHeight <= trimmedProbingMetrics.clientHeight) {
+		throw new Error('Expected probing to clamp to 3 lines when not focused.');
 	}
 	await page.keyboard.press('k');
 	const fullMetrics = await getElaborationMetrics();
@@ -309,10 +325,15 @@ export async function run({ page, baseUrl }) {
 	if (fullMetrics.scrollHeight > fullMetrics.clientHeight) {
 		throw new Error('Expected elaboration to be unclamped when concept is focused.');
 	}
+	const conceptTrimMetrics = await getConceptMetrics(1);
+	if (conceptTrimMetrics.scrollHeight <= conceptTrimMetrics.clientHeight) {
+		throw new Error('Expected concept to clamp to 3 lines when not focused.');
+	}
 
 	await page.keyboard.press('l');
 	await waitForText(page, 'BLOCK - DERIVATIVE');
 	await page.waitForSelector('[data-derivative-type="ELABORATION"] [data-testid^="derivative-text-"]');
+	await page.keyboard.press('j');
 	await page.keyboard.press('i');
 	await waitForText(page, 'NORMAL');
 	const cursorVisible = await page.$eval('[data-derivative-type="ELABORATION"] [data-testid^="derivative-text-"]', el => !!el.querySelector('.char-cursor'));

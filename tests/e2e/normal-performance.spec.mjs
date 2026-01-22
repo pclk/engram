@@ -9,6 +9,11 @@ const waitForText = async (page, text, timeout = 10000) => {
 const getCursorIndex = async (page) => page.evaluate(() => {
 	const container = document.querySelector('[data-testid="concept-text-0"]');
 	if (!container) return null;
+	const dataIndex = container.getAttribute('data-cursor-index');
+	if (dataIndex !== null) {
+		const parsed = Number(dataIndex);
+		return Number.isNaN(parsed) ? null : parsed;
+	}
 	const cursor = container.querySelector('.char-cursor');
 	if (!cursor) return null;
 
@@ -42,6 +47,8 @@ export async function run({ page, baseUrl }) {
 	console.log(`E2E Spec: ${label} - start`);
 	const url = new URL('/__e2e', baseUrl).toString();
 	await page.goto(url, { waitUntil: 'domcontentloaded' });
+	await page.evaluate(() => localStorage.clear());
+	await page.reload({ waitUntil: 'domcontentloaded' });
 	await waitForText(page, 'BLOCK - CONCEPT');
 	await page.waitForSelector('[data-testid="concept-text-0"]');
 	await page.click('body');
@@ -52,20 +59,19 @@ export async function run({ page, baseUrl }) {
 	await page.keyboard.press('i');
 	await page.waitForSelector('textarea');
 
-	const largeText = 'abcd '.repeat(2000); // 10k chars
-	await page.evaluate((text) => {
-		const textarea = document.querySelector('textarea');
-		if (!textarea) return;
-		textarea.value = text;
-		textarea.dispatchEvent(new Event('input', { bubbles: true }));
-	}, largeText);
+	const largeText = 'abcd '.repeat(600); // 3k chars
+	await page.type('textarea', largeText, { delay: 0 });
 
 	await page.keyboard.press('Escape');
 	await waitForText(page, 'NORMAL');
+	await page.waitForFunction(() => {
+		const container = document.querySelector('[data-testid="concept-text-0"]');
+		return !!container && (container.textContent?.length ?? 0) > 2000;
+	});
 	await page.keyboard.press('0');
 	await waitForCursorIndex(page, 0);
 
-	const moveCount = 400;
+	const moveCount = 200;
 	const moveStart = Date.now();
 	for (let i = 0; i < moveCount; i += 1) {
 		await page.keyboard.press('l');

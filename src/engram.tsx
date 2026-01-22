@@ -199,6 +199,57 @@ const trimLines = (text: string, maxLines: number) => {
 	return lines.slice(0, maxLines).join('\n') + '…';
 };
 
+const SCROLL_DURATION_MS = 120;
+
+const clampStyle = (shouldClamp: boolean): React.CSSProperties => (
+	shouldClamp
+		? {
+			overflow: 'hidden',
+			display: '-webkit-box',
+			WebkitLineClamp: 3,
+			WebkitBoxOrient: 'vertical'
+		}
+		: {
+			overflow: 'visible',
+			display: 'block',
+			WebkitLineClamp: 'unset',
+			WebkitBoxOrient: 'initial'
+		}
+);
+
+const smoothScrollTo = (
+	container: HTMLElement,
+	targetTop: number,
+	durationMs: number,
+	animationRef?: React.MutableRefObject<number | null>
+) => {
+	const startTop = container.scrollTop;
+	const maxScroll = Math.max(0, container.scrollHeight - container.clientHeight);
+	const clampedTarget = Math.max(0, Math.min(targetTop, maxScroll));
+	const distance = clampedTarget - startTop;
+	if (Math.abs(distance) < 1) return;
+	if (animationRef?.current) {
+		cancelAnimationFrame(animationRef.current);
+		animationRef.current = null;
+	}
+	if (durationMs <= 0) {
+		container.scrollTop = clampedTarget;
+		return;
+	}
+	const startTime = performance.now();
+	const easeInOut = (t: number) => (t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2);
+	const step = (now: number) => {
+		const elapsed = now - startTime;
+		const progress = Math.min(1, elapsed / durationMs);
+		const eased = easeInOut(progress);
+		container.scrollTop = startTop + distance * eased;
+		if (progress < 1) requestAnimationFrame(step);
+		else if (animationRef?.current) animationRef.current = null;
+	};
+	const frame = requestAnimationFrame(step);
+	if (animationRef) animationRef.current = frame;
+};
+
 function useUndo(initialState: HistoryState) {
 	const [past, setPast] = useState<HistoryState[]>([]);
 	const [present, setPresent] = useState<HistoryState>(initialState);
@@ -548,6 +599,7 @@ const App = () => {
 	const scrollContainerRef = useRef<HTMLDivElement>(null);
 	const inputRef = useRef<HTMLTextAreaElement>(null);
 	const normalCursorRef = useRef(0);
+	const scrollAnimationRef = useRef<number | null>(null);
 
 	const updateTopic = (newTopic: Topic, newCursorIdx = cursorIdx, newDerivIdx = derivIdx) => {
 		pushState({ topic: newTopic, cursorIdx: newCursorIdx, derivIdx: newDerivIdx });
@@ -1517,7 +1569,14 @@ const App = () => {
 
 	useLayoutEffect(() => {
 		if (mode !== 'BLOCK') return;
-		if (activeRef.current) activeRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' });
+		const container = scrollContainerRef.current;
+		const active = activeRef.current;
+		if (!container || !active) return;
+		const containerRect = container.getBoundingClientRect();
+		const activeRect = active.getBoundingClientRect();
+		const paddingTop = parseFloat(getComputedStyle(container).paddingTop || '0');
+		const targetTop = container.scrollTop + (activeRect.top - containerRect.top) - paddingTop;
+		smoothScrollTo(container, targetTop, SCROLL_DURATION_MS, scrollAnimationRef);
 	}, [cursorIdx, derivIdx, mode]);
 
 	useLayoutEffect(() => {
@@ -1529,10 +1588,12 @@ const App = () => {
 		if (!cursorEl) return;
 		const containerRect = container.getBoundingClientRect();
 		const cursorRect = cursorEl.getBoundingClientRect();
-		const isAbove = cursorRect.top < containerRect.top;
-		const isBelow = cursorRect.bottom > containerRect.bottom;
-		if (isAbove || isBelow) {
-			cursorEl.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'nearest' });
+		const cursorCenter = (cursorRect.top + cursorRect.bottom) / 2;
+		const containerCenter = (containerRect.top + containerRect.bottom) / 2;
+		const offset = cursorCenter - containerCenter;
+		if (Math.abs(offset) > 1) {
+			const targetTop = container.scrollTop + offset;
+			smoothScrollTo(container, targetTop, SCROLL_DURATION_MS, scrollAnimationRef);
 		}
 	}, [mode, normalCursor, cursorIdx, derivIdx, isSearching, searchQuery, lastSearchQuery, visualAnchor]);
 
@@ -2182,6 +2243,8 @@ const App = () => {
 						const isConceptActive = cursorIdx === cIdx && derivIdx === -1;
 						const conceptOpacity = isFocusMode && !isConceptActive ? 'opacity-20 grayscale transition-all duration-300' : 'opacity-100 transition-all duration-300';
 						const isConceptSelected = isBlockSelected(cIdx, -1);
+						const shouldRenderConceptMarkdown = mode === 'BLOCK' && !!concept.text;
+						const shouldClampConcept = mode === 'BLOCK' && cursorIdx !== cIdx;
 
 						return (
 							<div
@@ -2213,11 +2276,22 @@ const App = () => {
 											/>
 										)}
 										<div
-											className="break-words whitespace-pre-wrap min-h-[1.5em] text-[#c0caf5]"
-											style={{ overflowWrap: 'anywhere', wordBreak: 'break-word' }}
+											className={`break-words min-h-[1.5em] text-[#c0caf5] ${shouldRenderConceptMarkdown ? 'engram-markdown whitespace-normal' : 'whitespace-pre-wrap'}`}
+											style={{
+												overflowWrap: 'anywhere',
+												wordBreak: 'break-word',
+												...clampStyle(shouldClampConcept)
+											}}
 											data-testid={`concept-text-${cIdx}`}
+											data-cursor-index={mode === 'NORMAL' && cursorIdx === cIdx && derivIdx === -1 ? normalCursor : undefined}
 										>
-												{renderTextWithCursor(concept.text, cursorIdx === cIdx && derivIdx === -1, { cursorIdx: cIdx, derivIdx: -1 })}
+											{shouldRenderConceptMarkdown ? (
+												<ReactMarkdown remarkPlugins={[remarkGfm]}>
+													{concept.text}
+												</ReactMarkdown>
+											) : (
+												renderTextWithCursor(concept.text, cursorIdx === cIdx && derivIdx === -1, { cursorIdx: cIdx, derivIdx: -1 })
+											)}
 										</div>
 									</div>
 								</div>
@@ -2231,6 +2305,8 @@ const App = () => {
 										const isDerivActive = cursorIdx === cIdx && derivIdx === dIdx;
 										const derivOpacity = isFocusMode && !isDerivActive ? 'opacity-20 grayscale transition-all duration-300' : 'opacity-100 transition-all duration-300';
 										const isDerivSelected = isBlockSelected(cIdx, dIdx);
+										const shouldRenderDerivMarkdown = mode === 'BLOCK' && !!deriv.text;
+										const shouldClampDeriv = mode === 'BLOCK' && cursorIdx !== cIdx;
 
 										const borderColor = isProbing
 											? 'border-[#ff9e64]/30'
@@ -2292,20 +2368,16 @@ const App = () => {
 															/>
 														)}
 														<div
-															className={`break-words min-h-[1.5em] text-[#a9b1d6] ${isElaboration && mode === 'BLOCK' && deriv.text ? 'engram-markdown whitespace-normal' : 'whitespace-pre-wrap'}`}
+															className={`break-words min-h-[1.5em] text-[#a9b1d6] ${shouldRenderDerivMarkdown ? 'engram-markdown whitespace-normal' : 'whitespace-pre-wrap'}`}
 															style={{
 																overflowWrap: 'anywhere',
 																wordBreak: 'break-word',
-																overflow: isElaboration && mode === 'BLOCK' && cursorIdx !== cIdx ? 'hidden' : 'visible',
-																display: 'block',
-																maxHeight: isElaboration && mode === 'BLOCK' && cursorIdx !== cIdx ? '4.5em' : 'none'
+																...clampStyle(shouldClampDeriv)
 															}}
 															data-testid={`derivative-text-${cIdx}-${dIdx}`}
 														>
-															{isElaboration && mode === 'BLOCK' && deriv.text ? (
-																<ReactMarkdown
-																	remarkPlugins={[remarkGfm]}
-																>
+															{shouldRenderDerivMarkdown ? (
+																<ReactMarkdown remarkPlugins={[remarkGfm]}>
 																	{deriv.text}
 																</ReactMarkdown>
 															) : (
