@@ -545,6 +545,7 @@ const App = () => {
 	};
 
 	const activeRef = useRef<HTMLDivElement>(null);
+	const scrollContainerRef = useRef<HTMLDivElement>(null);
 	const inputRef = useRef<HTMLTextAreaElement>(null);
 	const normalCursorRef = useRef(0);
 
@@ -1515,8 +1516,25 @@ const App = () => {
 	}, [mode, keyBuffer, visualAnchor, yankBuffer, normalDeletePending, normalChangePending, normalYankPending, hState, isSearching, selectionPending, lastSearchQuery, cursorIdx, derivIdx, searchQuery, isDocumentSwitcherOpen]);
 
 	useLayoutEffect(() => {
-		if (activeRef.current) activeRef.current.scrollIntoView({ behavior: 'smooth', block: 'center' });
-	}, [cursorIdx, derivIdx]);
+		if (mode !== 'BLOCK') return;
+		if (activeRef.current) activeRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' });
+	}, [cursorIdx, derivIdx, mode]);
+
+	useLayoutEffect(() => {
+		if (mode !== 'NORMAL') return;
+		const container = scrollContainerRef.current;
+		const active = activeRef.current;
+		if (!container || !active) return;
+		const cursorEl = active.querySelector<HTMLElement>('.char-cursor');
+		if (!cursorEl) return;
+		const containerRect = container.getBoundingClientRect();
+		const cursorRect = cursorEl.getBoundingClientRect();
+		const isAbove = cursorRect.top < containerRect.top;
+		const isBelow = cursorRect.bottom > containerRect.bottom;
+		if (isAbove || isBelow) {
+			cursorEl.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'nearest' });
+		}
+	}, [mode, normalCursor, cursorIdx, derivIdx, isSearching, searchQuery, lastSearchQuery, visualAnchor]);
 
 	const refreshSession = async () => {
 		const { data } = await authClient.getSession();
@@ -2154,7 +2172,11 @@ const App = () => {
 				</div>
 			)}
 
-			<div className="flex-1 overflow-y-auto p-8 pt-24 relative">
+			<div
+				ref={scrollContainerRef}
+				className="flex-1 overflow-y-auto p-8 pt-24 relative"
+				data-testid="scroll-container"
+			>
 				<div className="max-w-3xl mx-auto pb-20 space-y-6">
 					{topic.concepts.map((concept, cIdx) => {
 						const isConceptActive = cursorIdx === cIdx && derivIdx === -1;
@@ -2165,6 +2187,7 @@ const App = () => {
 							<div
 								key={concept.id}
 								ref={cursorIdx === cIdx && derivIdx === -1 ? activeRef : null}
+								data-testid={`concept-block-${cIdx}`}
 								className={`p-4 rounded transition-all duration-100 relative
 											 border bg-[#24283b]
 											 ${cursorIdx === cIdx && derivIdx === -1 && mode === 'BLOCK'

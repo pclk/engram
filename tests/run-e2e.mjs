@@ -6,6 +6,7 @@ import { run as runAuthSpec } from './e2e/auth.spec.mjs';
 import { run as runKeybindingsSpec } from './e2e/keybindings.spec.mjs';
 import { run as runMarkdownSpec } from './e2e/markdown.spec.mjs';
 import { run as runNormalPerformanceSpec } from './e2e/normal-performance.spec.mjs';
+import { run as runScrollSpec } from './e2e/scroll.spec.mjs';
 import { run as runTopicsSpec } from './e2e/topics.spec.mjs';
 
 const HOST = '127.0.0.1';
@@ -86,6 +87,10 @@ const runTests = async () => {
 		console.log('E2E: normal performance spec start');
 		await runNormalPerformanceSpec({ page, baseUrl });
 		console.log('E2E: normal performance spec passed');
+
+		console.log('E2E: scroll spec start');
+		await runScrollSpec({ page, baseUrl });
+		console.log('E2E: scroll spec passed');
 
 		console.log('E2E: topics spec start');
 		await runTopicsSpec({ page, baseUrl });
