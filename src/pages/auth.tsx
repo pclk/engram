@@ -3,6 +3,7 @@ import { useLocation } from 'react-router-dom';
 
 export function Auth() {
 	const location = useLocation();
+	const debugAuth = new URLSearchParams(location.search).get('debugAuth') === '1';
 	const rawPath = location.pathname.replace(/^\/auth\/?/, '');
 	const normalized = rawPath || 'sign-in';
 	let viewPath = normalized.split('/')[0];
@@ -27,6 +28,24 @@ export function Auth() {
 						<p>Sign in to your knowledge workspace</p>
 					</div>
 				</div>
+				{debugAuth ? (
+					<div className="neon-auth-debug">
+						<strong>Auth debug</strong>
+						<pre>
+							{JSON.stringify(
+								{
+									origin: window.location.origin,
+									path: window.location.pathname,
+									search: window.location.search,
+									neonAuthUrl: import.meta.env.VITE_NEON_AUTH_URL,
+									neonDataApiUrl: import.meta.env.VITE_NEON_DATA_API_URL,
+								},
+								null,
+								2
+							)}
+						</pre>
+					</div>
+				) : null}
 				<AuthView path={viewPath} className="neon-auth-root" />
 				<div className="neon-auth-links">
 					<a href="/auth/sign-in">Sign in</a>
