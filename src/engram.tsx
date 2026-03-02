@@ -1033,7 +1033,7 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 				updateTopic(newTopic);
 			}
 		} catch (e) {
-			console.error("AI Generation failed", e);
+			console.error("Generation failed", e);
 		} finally {
 			setIsGenerating(false);
 		}
@@ -2155,7 +2155,7 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 			return (
 				<div className="flex flex-col gap-2">
 					<LegendItem keys="Space + f" description="Convert all clozes into Anki cards" />
-					<LegendItem keys="Space + g" description="AI actions for the current block" />
+					<LegendItem keys="Space + g" description="Generation actions for the current block" />
 					<LegendItem keys="Space + a" description="Open Folders" />
 					<LegendItem keys="Space + c" description="Copy topic as Markdown" />
 					<LegendItem keys="Esc" description="Cancel leader chord" />

@@ -223,7 +223,7 @@ const App = () => {
             updateTopic(newTopic);
         }
     } catch (e) {
-        console.error("AI Generation failed", e);
+        console.error("Generation failed", e);
     } finally {
         setIsGenerating(false);
     }
@@ -677,7 +677,7 @@ const App = () => {
              <div className="flex gap-2">
                 <div className={`flex items-center gap-1.5 text-[10px] font-bold px-2 py-1 rounded transition-colors ${isGenerating ? 'bg-[#bb9af7]/40 text-[#1a1b26] animate-pulse' : 'text-[#bb9af7] hover:bg-[#bb9af7]/10'}`}>
                     <span className="border border-[#bb9af7]/30 px-1 rounded bg-[#bb9af7]/10 min-w-[1.2rem] text-center">g</span>
-                    <span>AI</span>
+                    <span>Generate</span>
                 </div>
                 <div className={`flex items-center gap-1.5 text-[10px] font-bold px-2 py-1 rounded transition-colors duration-500 ${ankifyStatus === 'SUCCESS' ? 'bg-[#9ece6a] text-[#1a1b26]' : 'text-[#7dcfff] hover:bg-[#7dcfff]/10'}`}>
                     <span className={`border px-1 rounded min-w-[1.2rem] text-center ${ankifyStatus === 'SUCCESS' ? 'border-transparent bg-black/10' : 'border-[#7dcfff]/30 bg-[#7dcfff]/10'}`}>z</span>
