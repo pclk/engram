@@ -98,7 +98,7 @@ const waitForPersistenceMessage = async (page, timeout = 10000) => {
 };
 
 export async function run({ page, baseUrl }) {
-	const url = new URL('/__e2e', baseUrl).toString();
+	const url = new URL('/guest', baseUrl).toString();
 	await page.goto(url, { waitUntil: 'domcontentloaded' });
 	await page.waitForSelector('[data-testid="concept-text-0"]');
 	await page.click('body');

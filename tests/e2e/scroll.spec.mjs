@@ -18,7 +18,7 @@ const setTextareaValue = async (page, text) => {
 export async function run({ page, baseUrl }) {
 	const label = 'Scroll behavior for long blocks';
 	console.log(`E2E Spec: ${label} - start`);
-	const url = new URL('/__e2e', baseUrl).toString();
+	const url = new URL('/guest', baseUrl).toString();
 	await page.goto(url, { waitUntil: 'domcontentloaded' });
 	await waitForText(page, 'BLOCK - CONCEPT');
 	await page.waitForSelector('[data-testid="concept-text-0"]');
