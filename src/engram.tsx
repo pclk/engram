@@ -2262,6 +2262,17 @@ const App = () => {
 	};
 
 	const isFocusMode = mode === 'NORMAL' || mode === 'INSERT';
+	const handleTopicMetaInputBlur = (id: string, field: 'title' | 'folder') => {
+		window.setTimeout(() => {
+			const activeTestId = document.activeElement instanceof HTMLInputElement
+				? document.activeElement.dataset.testid || ''
+				: '';
+			const expectedPrefix = field === 'title' ? 'topic-title-input-' : 'topic-folder-input-';
+			if (activeTestId === `${expectedPrefix}${id}`) return;
+			setTopicMenuEditingTarget(prev => (prev?.id === id && prev.field === field ? null : prev));
+		}, 0);
+	};
+
 	const groupedTopics = topics.reduce((acc, item) => {
 		const folder = (folderDrafts[item.id] ?? item.folder ?? '').trim() || 'Uncategorized';
 		if (!acc[folder]) acc[folder] = [];
@@ -2859,8 +2870,8 @@ const App = () => {
 														data-testid={`topic-title-input-${item.id}`}
 														autoFocus={item.id === topicMenuEditingTarget?.id && topicMenuEditingTarget.field === 'title'}
 														onChange={(e) => updateTopicMeta(item.id, { title: e.target.value })}
-														onFocus={() => { setTopicMenuEditingTarget({ id: item.id, field: 'title' }); setTopicMenuIndex(index); }}
-														onBlur={() => setTopicMenuEditingTarget(prev => (prev?.id === item.id && prev.field === 'title' ? null : prev))}
+													onFocus={() => { setTopicMenuEditingTarget({ id: item.id, field: 'title' }); setTopicMenuIndex(index); }}
+													onBlur={() => handleTopicMetaInputBlur(item.id, 'title')}
 														onKeyDown={(e) => {
 														if (e.key === 'Escape') {
 															e.preventDefault();
@@ -2881,8 +2892,8 @@ const App = () => {
 														data-testid={`topic-folder-input-${item.id}`}
 														autoFocus={item.id === topicMenuEditingTarget?.id && topicMenuEditingTarget.field === 'folder'}
 														onChange={(e) => updateTopicMeta(item.id, { folder: e.target.value })}
-														onFocus={() => { setTopicMenuEditingTarget({ id: item.id, field: 'folder' }); setTopicMenuIndex(index); }}
-														onBlur={() => setTopicMenuEditingTarget(prev => (prev?.id === item.id && prev.field === 'folder' ? null : prev))}
+													onFocus={() => { setTopicMenuEditingTarget({ id: item.id, field: 'folder' }); setTopicMenuIndex(index); }}
+													onBlur={() => handleTopicMetaInputBlur(item.id, 'folder')}
 														onKeyDown={(e) => {
 														if (e.key === 'Escape') {
 															e.preventDefault();

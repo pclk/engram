@@ -224,15 +224,28 @@ export async function run({ page, baseUrl }) {
 			throw new Error(`Expected folder input to be focused, got "${activeTestId}"`);
 		}
 
-		await page.keyboard.type('Multi Word Folder');
-		await page.waitForFunction((testId) => {
-			const input = document.querySelector(`[data-testid="${testId}"]`);
-			return !!input && input.value.includes('Multi Word Folder');
-		}, {}, activeTestId);
+		const activeTopicId = activeTestId.replace('topic-folder-input-', '');
+		const titleInputTestId = `topic-title-input-${activeTopicId}`;
+		const typed = 'Multi Word Folder';
+		for (let i = 0; i < typed.length; i++) {
+			await page.keyboard.type(typed[i]);
+			const focusedInput = await page.evaluate(() => (document.activeElement instanceof HTMLInputElement ? document.activeElement.dataset.testid || '' : ''));
+			if (focusedInput !== activeTestId) {
+				throw new Error(`Expected focus to remain on ${activeTestId}, got "${focusedInput}" after typing index ${i}`);
+			}
+		}
 
-		const focusedAfterTyping = await page.evaluate(() => (document.activeElement instanceof HTMLInputElement ? document.activeElement.dataset.testid || '' : ''));
-		if (focusedAfterTyping !== activeTestId) {
-			throw new Error(`Expected focus to remain on ${activeTestId}, got "${focusedAfterTyping}"`);
+		await page.waitForFunction((testId, value) => {
+			const input = document.querySelector(`[data-testid="${testId}"]`);
+			return !!input && input.value.includes(value);
+		}, {}, activeTestId, typed);
+
+		const titleHasUnexpectedText = await page.$eval(
+			`[data-testid="${titleInputTestId}"]`,
+			el => (el instanceof HTMLInputElement ? el.value.includes('Multi Word Folder') : false)
+		);
+		if (titleHasUnexpectedText) {
+			throw new Error(`Expected title input ${titleInputTestId} not to receive folder text.`);
 		}
 
 		await page.keyboard.press('Escape');
