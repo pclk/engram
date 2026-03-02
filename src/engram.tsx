@@ -546,6 +546,7 @@ const App = () => {
 	};
 
 	const openTopic = (id: string) => {
+		commitTopicMetaDraft(id);
 		const target = topics.find(item => item.id === id);
 		if (!target) return;
 		const draftTitle = topicDrafts[id] ?? target.title;
@@ -572,28 +573,38 @@ const App = () => {
 		queueSaveTopic(newTopic);
 	};
 
-	const updateTopicMeta = (id: string, updates: { title?: string; folder?: string }) => {
-		syncTopicMetaDraft(id, updates);
+	const commitTopicMetaDraft = (id: string, fields?: Array<'title' | 'folder'>) => {
+		const target = topics.find(item => item.id === id);
+		if (!target) return;
+		const shouldCommitTitle = !fields || fields.includes('title');
+		const shouldCommitFolder = !fields || fields.includes('folder');
+		const nextTitle = shouldCommitTitle ? (topicDrafts[id] ?? target.title) : target.title;
+		const nextFolder = shouldCommitFolder ? (folderDrafts[id] ?? target.folder) : target.folder;
+		if (nextTitle === target.title && nextFolder === target.folder) return;
+		const updated = {
+			...target,
+			title: nextTitle,
+			folder: nextFolder
+		};
 		setTopics(prev => prev.map(item => {
 			if (item.id !== id) return item;
-			const updated = {
-				...item,
-				title: updates.title ?? item.title,
-				folder: updates.folder ?? item.folder
-			};
-			queueSaveTopic(updated);
 			return updated;
 		}));
+		queueSaveTopic(updated);
 		if (id === activeTopicId) {
 			setHState(prev => ({
 				...prev,
 				topic: {
 					...prev.topic,
-					title: updates.title ?? prev.topic.title,
-					folder: updates.folder ?? prev.topic.folder
+					title: nextTitle,
+					folder: nextFolder
 				}
 			}));
 		}
+	};
+
+	const updateTopicMeta = (id: string, updates: { title?: string; folder?: string }) => {
+		syncTopicMetaDraft(id, updates);
 	};
 
 	const deleteTopic = (id: string) => {
@@ -2263,6 +2274,7 @@ const App = () => {
 
 	const isFocusMode = mode === 'NORMAL' || mode === 'INSERT';
 	const handleTopicMetaInputBlur = (id: string, field: 'title' | 'folder') => {
+		commitTopicMetaDraft(id, [field]);
 		window.setTimeout(() => {
 			const activeTestId = document.activeElement instanceof HTMLInputElement
 				? document.activeElement.dataset.testid || ''
@@ -2274,7 +2286,7 @@ const App = () => {
 	};
 
 	const groupedTopics = topics.reduce((acc, item) => {
-		const folder = (folderDrafts[item.id] ?? item.folder ?? '').trim() || 'Uncategorized';
+		const folder = (item.folder ?? '').trim() || 'Uncategorized';
 		if (!acc[folder]) acc[folder] = [];
 		acc[folder].push(item);
 		return acc;
