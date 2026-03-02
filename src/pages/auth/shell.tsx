@@ -2,7 +2,7 @@ import { NeonAuthUIProvider } from '@neondatabase/neon-js/auth/react/ui';
 import '@neondatabase/neon-js/ui/css';
 import '../../auth-theme.css';
 import { toast as sonnerToast } from 'sonner';
-import { authClient } from '../../lib/auth';
+import { authClient } from '../../lib/auth-client';
 import { AuthViewPage } from './view';
 
 const AUTH_VERIFY_PATH = '/auth/email-otp/verify-email';
