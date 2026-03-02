@@ -2879,6 +2879,7 @@ const App = () => {
 														className="flex-1 bg-transparent text-[11px] text-[#94a0c6] outline-none"
 														value={folderDrafts[item.id] ?? item.folder}
 														data-testid={`topic-folder-input-${item.id}`}
+														autoFocus={item.id === topicMenuEditingTarget?.id && topicMenuEditingTarget.field === 'folder'}
 														onChange={(e) => updateTopicMeta(item.id, { folder: e.target.value })}
 														onFocus={() => { setTopicMenuEditingTarget({ id: item.id, field: 'folder' }); setTopicMenuIndex(index); }}
 														onBlur={() => setTopicMenuEditingTarget(prev => (prev?.id === item.id && prev.field === 'folder' ? null : prev))}

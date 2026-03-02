@@ -210,6 +210,34 @@ export async function run({ page, baseUrl }) {
 		await page.keyboard.press('Escape');
 	});
 
+
+	await runStep('Folder edit keeps focus while typing', async () => {
+		await openTopicSwitcher(page);
+		await page.keyboard.press('f');
+		await page.waitForFunction(() => {
+			const el = document.activeElement;
+			return !!el && el instanceof HTMLInputElement && (el.dataset.testid || '').startsWith('topic-folder-input-');
+		});
+
+		const activeTestId = await page.evaluate(() => (document.activeElement instanceof HTMLInputElement ? document.activeElement.dataset.testid || '' : ''));
+		if (!activeTestId.startsWith('topic-folder-input-')) {
+			throw new Error(`Expected folder input to be focused, got "${activeTestId}"`);
+		}
+
+		await page.keyboard.type('Multi Word Folder');
+		await page.waitForFunction((testId) => {
+			const input = document.querySelector(`[data-testid="${testId}"]`);
+			return !!input && input.value.includes('Multi Word Folder');
+		}, {}, activeTestId);
+
+		const focusedAfterTyping = await page.evaluate(() => (document.activeElement instanceof HTMLInputElement ? document.activeElement.dataset.testid || '' : ''));
+		if (focusedAfterTyping !== activeTestId) {
+			throw new Error(`Expected focus to remain on ${activeTestId}, got "${focusedAfterTyping}"`);
+		}
+
+		await page.keyboard.press('Escape');
+		await page.keyboard.press('Escape');
+	});
 	await runStep('Topics persistence across reload', async () => {
 		await openTopicSwitcher(page);
 		const beforeCount = await page.$$eval('[data-testid^="topic-item-"]', els => els.length);
