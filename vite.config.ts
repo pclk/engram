@@ -18,6 +18,37 @@ export default defineConfig(({ mode }) => {
         alias: {
           '@': path.resolve(__dirname, '.'),
         }
+      },
+      build: {
+        rollupOptions: {
+          output: {
+            manualChunks(id) {
+              if (!id.includes('node_modules')) {
+                return;
+              }
+
+              if (id.includes('/@neondatabase/auth-ui/') || id.includes('/@neondatabase/neon-js/auth/')) {
+                return 'neon-auth-ui';
+              }
+
+              if (id.includes('/@neondatabase/neon-js/') || id.includes('/@neondatabase/auth/')) {
+                return 'neon-auth';
+              }
+
+              if (id.includes('/node_modules/react/') || id.includes('/node_modules/react-dom/') || id.includes('/node_modules/react-router-dom/')) {
+                return 'react-vendor';
+              }
+
+              if (id.includes('/react-markdown/') || id.includes('/remark-gfm/') || id.includes('/rehype-sanitize/')) {
+                return 'markdown-vendor';
+              }
+
+              if (id.includes('/@google/genai/')) {
+                return 'genai';
+              }
+            },
+          },
+        },
       }
     };
 });
