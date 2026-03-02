@@ -22,13 +22,14 @@ export default defineConfig(() => {
                 return;
               }
 
-              if (id.includes('/@neondatabase/auth-ui/') || id.includes('/@neondatabase/neon-js/auth/')) {
+              if (id.includes('/@neondatabase/neon-js/auth/react/ui/') || id.includes('/@neondatabase/auth/dist/ui-')) {
                 return 'neon-auth-ui';
               }
 
-              if (id.includes('/@neondatabase/neon-js/') || id.includes('/@neondatabase/auth/')) {
+              if (id.includes('/@neondatabase/neon-js/auth/') || id.includes('/@neondatabase/auth/dist/react/') || id.includes('/@neondatabase/auth/dist/neon-auth-')) {
                 return 'neon-auth';
               }
+
 
               if (id.includes('/node_modules/react/') || id.includes('/node_modules/react-dom/') || id.includes('/node_modules/react-router-dom/')) {
                 return 'react-vendor';

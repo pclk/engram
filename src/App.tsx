@@ -2,13 +2,9 @@ import { Suspense, lazy } from 'react';
 import { Route, Routes } from 'react-router-dom';
 
 const EngramApp = lazy(() => import('./engram'));
-const Auth = lazy(() => import('./pages/auth').then(module => ({ default: module.Auth })));
 const Home = lazy(() => import('./pages/home').then(module => ({ default: module.Home })));
 
-const AuthShell = lazy(async () => {
-	const mod = await import('./pages/auth/shell');
-	return { default: mod.AuthShell };
-});
+const AuthShell = lazy(() => import('./pages/auth/shell').then(module => ({ default: module.AuthShell })));
 
 export default function App() {
 	const isE2E = import.meta.env.VITE_E2E === 'true';
@@ -34,7 +30,7 @@ export default function App() {
 				path="/auth/*"
 				element={
 					<Suspense fallback={<div>Loading...</div>}>
-						<Auth />
+						<AuthShell />
 					</Suspense>
 				}
 			/>
