@@ -27,7 +27,7 @@ export async function run({ page, baseUrl }) {
 	const label = 'Markdown formatting (all blocks)';
 	const startTime = Date.now();
 	console.log(`E2E Spec: ${label} - start`);
-	const url = new URL('/__e2e', baseUrl).toString();
+	const url = new URL('/guest', baseUrl).toString();
 	await page.goto(url, { waitUntil: 'domcontentloaded' });
 	await page.evaluate(() => localStorage.clear());
 	await page.reload({ waitUntil: 'domcontentloaded' });

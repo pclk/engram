@@ -8,6 +8,7 @@ export default function App() {
 	return (
 		<Routes>
 			<Route path="/" element={<Home />} />
+			<Route path="/guest" element={<EngramApp guestMode />} />
 			<Route path="/auth/*" element={<Auth />} />
 			{isE2E && <Route path="/__e2e" element={<EngramApp />} />}
 		</Routes>

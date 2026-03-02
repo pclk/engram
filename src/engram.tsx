@@ -321,7 +321,8 @@ const LegendItem = ({ keys, description }: { keys: string; description: string }
 
 // --- Main App ---
 
-const App = () => {
+const App = ({ guestMode = false }: { guestMode?: boolean }) => {
+	const useLocalPersistence = isE2E || guestMode;
 	const [topics, setTopics] = useState<Topic[]>([INITIAL_TOPIC]);
 	const [activeTopicId, setActiveTopicId] = useState(INITIAL_TOPIC.id);
 	const [isHydrated, setIsHydrated] = useState(false);
@@ -379,7 +380,7 @@ const App = () => {
 	const [passwordForm, setPasswordForm] = useState({ currentPassword: '', newPassword: '', confirmPassword: '' });
 	const [passwordStatus, setPasswordStatus] = useState<{ type: 'idle' | 'saving' | 'success' | 'error'; message?: string }>({ type: 'idle' });
 	const user = sessionData?.user;
-	const userName = (user?.name || user?.displayName || user?.email || 'User') as string;
+	const userName = guestMode ? 'Guest' : (user?.name || user?.displayName || user?.email || 'User') as string;
 	const initials = userName
 		.split(' ')
 		.filter(Boolean)
@@ -478,7 +479,7 @@ const App = () => {
 	};
 
 	const queueSaveTopic = (nextTopic: Topic) => {
-		if (isE2E || !userId || !isHydrated) return;
+		if (useLocalPersistence || !userId || !isHydrated) return;
 		const normalized = normalizeTopic(nextTopic);
 		const serialized = stableStringify(normalized);
 		if (lastSavedRef.current[normalized.id] === serialized) return;
@@ -522,7 +523,7 @@ const App = () => {
 	};
 
 	const deletePersistedTopic = async (topicId: string) => {
-		if (isE2E || !userId || !isHydrated) return;
+		if (useLocalPersistence || !userId || !isHydrated) return;
 		const existingTimer = saveTimersRef.current[topicId];
 		if (existingTimer) window.clearTimeout(existingTimer);
 		delete saveTimersRef.current[topicId];
@@ -1695,6 +1696,7 @@ const App = () => {
 	}, [mode, normalCursor, cursorIdx, derivIdx, isSearching, searchQuery, lastSearchQuery, visualAnchor]);
 
 	const refreshSession = async () => {
+		if (guestMode) return;
 		const { data } = await authClient.getSession();
 		setSessionData(data ?? null);
 	};
@@ -1702,6 +1704,7 @@ const App = () => {
 	useEffect(() => {
 		let isActive = true;
 		const fetchSession = async () => {
+			if (guestMode) return;
 			const { data } = await authClient.getSession();
 			if (isActive) setSessionData(data ?? null);
 		};
@@ -1709,7 +1712,7 @@ const App = () => {
 		return () => {
 			isActive = false;
 		};
-	}, [isAccountOpen]);
+	}, [isAccountOpen, guestMode]);
 
 	useEffect(() => {
 		setProfileForm({
@@ -1719,7 +1722,7 @@ const App = () => {
 	}, [user?.name, user?.displayName, user?.email]);
 
 	useEffect(() => {
-		if (isE2E) return;
+		if (useLocalPersistence) return;
 		if (!import.meta.env.VITE_NEON_AUTH_URL || !import.meta.env.VITE_NEON_DATA_API_URL) {
 			setPersistStatus({ state: 'error', message: 'Missing Neon env vars.' });
 			return;
@@ -1731,18 +1734,21 @@ const App = () => {
 		if (!isHydrated) {
 			setPersistStatus({ state: 'idle', message: 'Loading topics…' });
 		}
-	}, [isE2E, userId, isHydrated]);
+	}, [useLocalPersistence, userId, isHydrated]);
 
 	useEffect(() => {
-		if (!isE2E) return;
-		setPersistStatus({ state: 'saved', message: 'Local persistence (E2E)' });
-	}, [isE2E]);
+		if (!useLocalPersistence) return;
+		setPersistStatus({
+			state: 'saved',
+			message: guestMode ? 'Local persistence (Guest mode)' : 'Local persistence (E2E)'
+		});
+	}, [useLocalPersistence, guestMode]);
 
 	useEffect(() => {
 		let isActive = true;
 		const hydrateTopics = async () => {
 			if (isHydrated) return;
-			if (isE2E) {
+			if (useLocalPersistence) {
 				const stored = loadLocalTopics();
 				const activeId = localStorage.getItem(LOCAL_ACTIVE_TOPIC_KEY);
 				const normalized = (stored && stored.length)
@@ -1811,16 +1817,16 @@ const App = () => {
 		return () => {
 			isActive = false;
 		};
-	}, [isHydrated, userId, userEmail]);
+	}, [isHydrated, userId, userEmail, useLocalPersistence]);
 
 	useEffect(() => {
 		normalCursorRef.current = normalCursor;
 	}, [normalCursor]);
 
 	useEffect(() => {
-		if (!isHydrated || !isE2E) return;
+		if (!isHydrated || !useLocalPersistence) return;
 		saveLocalTopics(topics, activeTopicId);
-	}, [topics, activeTopicId, isHydrated]);
+	}, [topics, activeTopicId, isHydrated, useLocalPersistence]);
 
 	useEffect(() => {
 		if (!isHydrated) return;
@@ -1913,7 +1919,7 @@ const App = () => {
 		return () => {
 			document.body.style.overflow = '';
 		};
-	}, [isAccountOpen]);
+	}, [isAccountOpen, guestMode]);
 
 	useEffect(() => {
 		if (!visualAnchor) return;
@@ -2334,10 +2340,10 @@ const App = () => {
 					<div className="flex gap-2 items-center">
 						<button
 							className="h-8 w-8 rounded-full border border-[#2a2f45] bg-[#1f2335] text-[10px] font-bold text-[#c0caf5] shadow-md hover:border-[#7aa2f7]/60 hover:bg-[#24283b] transition"
-							onClick={() => setIsAccountOpen(true)}
+							onClick={() => { if (!guestMode) setIsAccountOpen(true); }}
 							aria-label="Open account settings"
 						>
-							{user?.image ? (
+							{!guestMode && user?.image ? (
 								<img src={user.image} alt={userName} className="h-full w-full rounded-full object-cover" />
 							) : (
 								<span>{initials}</span>
@@ -2568,7 +2574,7 @@ const App = () => {
 				</div>
 			</div>
 
-			{isAccountOpen && (
+			{!guestMode && isAccountOpen && (
 				<div className="fixed inset-0 z-50 flex items-center justify-center bg-[#0b0e17]/80">
 					<div className="w-[min(920px,92vw)] max-h-[85vh] overflow-hidden rounded-2xl border border-[#22283a] bg-[#141821] shadow-[0_30px_80px_rgba(6,8,14,0.65)]">
 						<div className="flex items-center justify-between border-b border-[#1f2536] bg-[#171c28] px-5 py-4">
@@ -2607,7 +2613,7 @@ const App = () => {
 								<div className="mt-4 grid gap-4 md:grid-cols-[140px_1fr]">
 									<div className="flex flex-col items-start gap-3">
 										<div className="h-16 w-16 rounded-full border border-[#283049] bg-[#101521] overflow-hidden">
-											{user?.image ? (
+											{!guestMode && user?.image ? (
 												<img src={user.image} alt={userName} className="h-full w-full object-cover" />
 											) : (
 												<div className="h-full w-full flex items-center justify-center text-sm font-bold text-[#9bb2ff]">
