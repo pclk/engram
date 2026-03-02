@@ -5,6 +5,11 @@ const EngramApp = lazy(() => import('./engram'));
 const Auth = lazy(() => import('./pages/auth').then(module => ({ default: module.Auth })));
 const Home = lazy(() => import('./pages/home').then(module => ({ default: module.Home })));
 
+const AuthShell = lazy(async () => {
+	const mod = await import('./pages/auth/shell');
+	return { default: mod.AuthShell };
+});
+
 export default function App() {
 	const isE2E = import.meta.env.VITE_E2E === 'true';
 	return (
