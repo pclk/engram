@@ -32,7 +32,7 @@ jobs:
             libxdamage1 \
             libxrandr2 \
             libgbm1 \
-            libasound2 \
+            libasound2t64 \
             libcups2 \
             libxshmfence1 \
             libdrm2 \
