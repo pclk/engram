@@ -1375,7 +1375,6 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 				}
 				if (keyBuffer === ' ') {
 					if (e.key === 'f') { setKeyBuffer(''); handleAnkify(); return; }
-					if (e.key === 'g') { setKeyBuffer(''); handleGenerate(); return; }
 					if (e.key === 'a') { setKeyBuffer(''); setTopicMenuEditingTarget(null); setIsDocumentSwitcherOpen(true); return; }
 					if (e.key === 'c') { setKeyBuffer(''); handleCopyMarkdown(); return; }
 					setKeyBuffer('');
@@ -2155,7 +2154,6 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 			return (
 				<div className="flex flex-col gap-2">
 					<LegendItem keys="Space + f" description="Convert all clozes into Anki cards" />
-					<LegendItem keys="Space + g" description="AI actions for the current block" />
 					<LegendItem keys="Space + a" description="Open Folders" />
 					<LegendItem keys="Space + c" description="Copy topic as Markdown" />
 					<LegendItem keys="Esc" description="Cancel leader chord" />
