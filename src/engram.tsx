@@ -5,20 +5,6 @@ import { authClient, neon } from './lib/auth';
 
 // --- Configuration & Types ---
 
-const apiKey = process.env.API_KEY || process.env.GEMINI_API_KEY;
-let aiClient: any = null;
-let genAiType: any = null;
-
-const loadAi = async () => {
-	if (!apiKey) return null;
-	if (aiClient && genAiType) return { ai: aiClient, Type: genAiType };
-	const mod = await import('@google/genai');
-	aiClient = new mod.GoogleGenAI({ apiKey });
-	genAiType = mod.Type;
-	return { ai: aiClient, Type: genAiType };
-};
-
-
 type Mode = 'BLOCK' | 'NORMAL' | 'INSERT';
 type DerivativeType = 'PROBING' | 'CLOZE' | 'ELABORATION';
 type YankedItem =
@@ -994,46 +980,10 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 		if (!currentConcept || !currentConcept.text) return;
 		setIsGenerating(true);
 		try {
-			const loaded = await loadAi();
-			if (!loaded) return;
-			const { ai, Type } = loaded;
-			const response = await ai.models.generateContent({
-				model: 'gemini-3-flash-preview',
-				contents: `Generate 2 distinct study derivatives (strictly one PROBING question, one CLOZE deletion sentence) based on this concept: "${currentConcept.text}".`,
-				config: {
-					responseMimeType: 'application/json',
-					responseSchema: {
-						type: Type.ARRAY,
-						items: {
-							type: Type.OBJECT,
-							properties: {
-								type: { type: Type.STRING, enum: ['PROBING', 'CLOZE'] },
-								text: { type: Type.STRING }
-							},
-							required: ['type', 'text']
-						}
-					}
-				}
+			setPersistStatus({
+				state: 'error',
+				message: 'AI generation is unavailable in this build.'
 			});
-
-			const rawText = response.text;
-			if (rawText) {
-				const data = JSON.parse(rawText) as { type: string, text: string }[];
-				const newDerivs: Derivative[] = data.map(d => ({
-					id: generateId(),
-					type: (d.type.toUpperCase() === 'PROBING' ? 'PROBING' : 'CLOZE') as DerivativeType,
-					text: d.text
-				}));
-
-				const newTopic = { ...topic, concepts: [...topic.concepts] };
-				newTopic.concepts[cursorIdx].derivatives = sortDerivatives([
-					...newTopic.concepts[cursorIdx].derivatives,
-					...newDerivs
-				]);
-				updateTopic(newTopic);
-			}
-		} catch (e) {
-			console.error("AI Generation failed", e);
 		} finally {
 			setIsGenerating(false);
 		}
