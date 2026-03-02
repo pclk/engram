@@ -399,7 +399,7 @@ const App = () => {
 	});
 	const [topicMenuIndex, setTopicMenuIndex] = useState(0);
 	const topicMenuIndexRef = useRef(0);
-	const [topicMenuEditingId, setTopicMenuEditingId] = useState<string | null>(null);
+	const [topicMenuEditingTarget, setTopicMenuEditingTarget] = useState<{ id: string; field: 'title' | 'folder' } | null>(null);
 	const [lastCopiedMarkdown, setLastCopiedMarkdown] = useState('');
 	const [toastMessage, setToastMessage] = useState<string | null>(null);
 	const [persistStatus, setPersistStatus] = useState<{
@@ -557,7 +557,7 @@ const App = () => {
 		setActiveTopicId(id);
 		syncTopicMetaDraft(id, { title: resolvedTopic.title, folder: resolvedTopic.folder });
 		resetHistory({ topic: resolvedTopic, cursorIdx: 0, derivIdx: -1 });
-		setTopicMenuEditingId(null);
+		setTopicMenuEditingTarget(null);
 		setIsDocumentSwitcherOpen(false);
 	};
 
@@ -568,7 +568,7 @@ const App = () => {
 		syncTopicMetaDraft(newTopic.id, { title: newTopic.title, folder: newTopic.folder });
 		resetHistory({ topic: newTopic, cursorIdx: 0, derivIdx: -1 });
 		setTopicMenuIndex(Math.max(0, topics.length));
-		setTopicMenuEditingId(newTopic.id);
+		setTopicMenuEditingTarget({ id: newTopic.id, field: 'title' });
 		queueSaveTopic(newTopic);
 	};
 
@@ -621,7 +621,7 @@ const App = () => {
 			delete next[id];
 			return next;
 		});
-		setTopicMenuEditingId(prev => (prev === id ? null : prev));
+		setTopicMenuEditingTarget(prev => (prev?.id === id ? null : prev));
 		deletePersistedTopic(id);
 	};
 
@@ -1113,7 +1113,7 @@ const App = () => {
 					e.preventDefault();
 					if (e.key === 'Escape') {
 						setIsDocumentSwitcherOpen(false);
-						setTopicMenuEditingId(null);
+						setTopicMenuEditingTarget(null);
 						return;
 					}
 					if (e.key === 'j') {
@@ -1140,7 +1140,7 @@ const App = () => {
 					if (e.key === 'c') {
 						const target = topics[topicMenuIndexRef.current];
 						if (target) {
-							setTopicMenuEditingId(target.id);
+							setTopicMenuEditingTarget({ id: target.id, field: 'title' });
 							window.setTimeout(() => {
 								document.querySelector<HTMLInputElement>(`[data-testid="topic-title-input-${target.id}"]`)?.focus();
 							}, 0);
@@ -1150,7 +1150,7 @@ const App = () => {
 					if (e.key === 'f') {
 						const target = topics[topicMenuIndexRef.current];
 						if (target) {
-							setTopicMenuEditingId(target.id);
+							setTopicMenuEditingTarget({ id: target.id, field: 'folder' });
 							window.setTimeout(() => {
 								document.querySelector<HTMLInputElement>(`[data-testid="topic-folder-input-${target.id}"]`)?.focus();
 							}, 0);
@@ -1166,12 +1166,12 @@ const App = () => {
 				}
 				if (e.key === 'Escape') {
 					e.preventDefault();
-					setTopicMenuEditingId(null);
+					setTopicMenuEditingTarget(null);
 					return;
 				}
 				if (e.key === 'Enter') {
 					e.preventDefault();
-					const targetId = topicMenuEditingId;
+					const targetId = topicMenuEditingTarget?.id;
 					if (targetId) openTopic(targetId);
 					return;
 				}
@@ -1364,7 +1364,7 @@ const App = () => {
 				if (keyBuffer === ' ') {
 					if (e.key === 'f') { setKeyBuffer(''); handleAnkify(); return; }
 					if (e.key === 'g') { setKeyBuffer(''); handleGenerate(); return; }
-					if (e.key === 'a') { setKeyBuffer(''); setTopicMenuEditingId(null); setIsDocumentSwitcherOpen(true); return; }
+					if (e.key === 'a') { setKeyBuffer(''); setTopicMenuEditingTarget(null); setIsDocumentSwitcherOpen(true); return; }
 					if (e.key === 'c') { setKeyBuffer(''); handleCopyMarkdown(); return; }
 					setKeyBuffer('');
 					return;
@@ -1445,7 +1445,7 @@ const App = () => {
 					if (deleteVisualBlockSelection(true)) return;
 				}
 				if (keyBuffer === ' ') {
-					if (e.key === 'a') { setKeyBuffer(''); setTopicMenuEditingId(null); setIsDocumentSwitcherOpen(true); return; }
+					if (e.key === 'a') { setKeyBuffer(''); setTopicMenuEditingTarget(null); setIsDocumentSwitcherOpen(true); return; }
 					if (e.key === 'c') { setKeyBuffer(''); handleCopyMarkdown(); return; }
 					setKeyBuffer('');
 					return;
@@ -1845,14 +1845,14 @@ const App = () => {
 		const nextIndex = activeIndex >= 0 ? activeIndex : 0;
 		setTopicMenuIndex(nextIndex);
 		topicMenuIndexRef.current = nextIndex;
-		setTopicMenuEditingId(null);
+		setTopicMenuEditingTarget(null);
 	}, [isDocumentSwitcherOpen, topics, activeTopicId]);
 
 	useEffect(() => {
-		if (!isDocumentSwitcherOpen || !topicMenuEditingId) return;
+		if (!isDocumentSwitcherOpen || !topicMenuEditingTarget) return;
 		const focusInput = () => {
 			const input = document.querySelector<HTMLInputElement>(
-				`[data-testid="topic-title-input-${topicMenuEditingId}"]`
+				`[data-testid="topic-${topicMenuEditingTarget.field}-input-${topicMenuEditingTarget.id}"]`
 			);
 			if (input) {
 				input.focus();
@@ -1865,7 +1865,7 @@ const App = () => {
 			if (focusInput()) return;
 			setTimeout(focusInput, 50);
 		});
-	}, [isDocumentSwitcherOpen, topicMenuEditingId, topics.length]);
+	}, [isDocumentSwitcherOpen, topicMenuEditingTarget, topics.length]);
 
 	useEffect(() => {
 		if (mode === 'INSERT') {
@@ -2812,7 +2812,7 @@ const App = () => {
 							<button
 								className="text-[10px] font-bold px-2 py-1 rounded border border-[#5b79d6]/40 text-[#9bb2ff] hover:bg-[#5b79d6]/15 transition"
 								data-testid="topic-close"
-								onClick={() => { setIsDocumentSwitcherOpen(false); setTopicMenuEditingId(null); }}
+								onClick={() => { setIsDocumentSwitcherOpen(false); setTopicMenuEditingTarget(null); }}
 							>
 								CLOSE
 							</button>
@@ -2821,7 +2821,8 @@ const App = () => {
 							<div className="flex items-center justify-between">
 								<div>
 									<div className="text-[10px] font-bold text-[#cbd3f2]">Current note</div>
-									<div className="mt-1 text-[12px] text-[#94a0c6]">{topic.folder ? `${topic.folder}/${topic.title}` : topic.title}</div>
+									<div className="mt-1 text-[10px] text-[#7aa2f7]">{topic.folder || 'Uncategorized'}</div>
+									<div className="text-[12px] text-[#94a0c6]">{topic.title}</div>
 								</div>
 								<button
 									className="text-[10px] font-bold px-2 py-1 rounded border border-[#7aa2f7]/40 text-[#9bb2ff] hover:bg-[#5b79d6]/15 transition"
@@ -2832,7 +2833,7 @@ const App = () => {
 								</button>
 							</div>
 							<div className="rounded-lg border border-[#22283a] bg-[#161b27] px-3 py-2 text-[10px] text-[#94a0c6]">
-								{topicMenuEditingId ? (
+								{topicMenuEditingTarget ? (
 									<span><span className="font-bold text-[#cbd3f2]">Editing:</span> Esc finish, Enter open</span>
 								) : (
 									<span><span className="font-bold text-[#cbd3f2]">Keys:</span> j/k move, o new, c edit title, f edit folder, Enter/l open, d delete, Esc close</span>
@@ -2852,37 +2853,50 @@ const App = () => {
 													className={`flex items-center gap-2 rounded-lg border px-3 py-2 ${item.id === activeTopicId ? 'border-[#7aa2f7]/60 bg-[#1b2131]' : 'border-[#22283a] bg-[#161b27]'} ${topics[topicMenuIndex]?.id === item.id ? 'ring-1 ring-[#ff9e64] shadow-[0_0_10px_rgba(255,158,100,0.3)]' : ''}`}
 												>
 													<div className="w-full space-y-1.5">
-														<input
-															className="flex-1 bg-transparent text-[12px] text-[#c0caf5] outline-none"
-															value={topicDrafts[item.id] ?? item.title}
-															data-testid={`topic-title-input-${item.id}`}
-															autoFocus={item.id === topicMenuEditingId}
-															onChange={(e) => updateTopicMeta(item.id, { title: e.target.value })}
-															onFocus={() => { setTopicMenuEditingId(item.id); setTopicMenuIndex(index); }}
-															onBlur={() => setTopicMenuEditingId(prev => (prev === item.id ? null : prev))}
-															onKeyDown={(e) => {
-																if (e.key === 'Escape') {
-																	e.preventDefault();
-																	setTopicMenuEditingId(null);
-																	(e.currentTarget as HTMLInputElement).blur();
-																	return;
-																}
-																if (e.key === 'Enter') {
-																	e.preventDefault();
-																	openTopic(item.id);
-																}
-															}}
-															placeholder="Untitled Topic"
-														/>
-														<input
-															className="flex-1 bg-transparent text-[11px] text-[#94a0c6] outline-none"
-															value={folderDrafts[item.id] ?? item.folder}
-															data-testid={`topic-folder-input-${item.id}`}
-															onChange={(e) => updateTopicMeta(item.id, { folder: e.target.value })}
-															onFocus={() => { setTopicMenuEditingId(item.id); setTopicMenuIndex(index); }}
-															placeholder="Folder"
-														/>
-													</div>
+													<input
+														className="flex-1 bg-transparent text-[12px] text-[#c0caf5] outline-none"
+														value={topicDrafts[item.id] ?? item.title}
+														data-testid={`topic-title-input-${item.id}`}
+														autoFocus={item.id === topicMenuEditingTarget?.id && topicMenuEditingTarget.field === 'title'}
+														onChange={(e) => updateTopicMeta(item.id, { title: e.target.value })}
+														onFocus={() => { setTopicMenuEditingTarget({ id: item.id, field: 'title' }); setTopicMenuIndex(index); }}
+														onBlur={() => setTopicMenuEditingTarget(prev => (prev?.id === item.id && prev.field === 'title' ? null : prev))}
+														onKeyDown={(e) => {
+														if (e.key === 'Escape') {
+															e.preventDefault();
+															setTopicMenuEditingTarget(null);
+															(e.currentTarget as HTMLInputElement).blur();
+															return;
+														}
+														if (e.key === 'Enter') {
+															e.preventDefault();
+															openTopic(item.id);
+														}
+													}}
+														placeholder="Untitled Topic"
+													/>
+													<input
+														className="flex-1 bg-transparent text-[11px] text-[#94a0c6] outline-none"
+														value={folderDrafts[item.id] ?? item.folder}
+														data-testid={`topic-folder-input-${item.id}`}
+														onChange={(e) => updateTopicMeta(item.id, { folder: e.target.value })}
+														onFocus={() => { setTopicMenuEditingTarget({ id: item.id, field: 'folder' }); setTopicMenuIndex(index); }}
+														onBlur={() => setTopicMenuEditingTarget(prev => (prev?.id === item.id && prev.field === 'folder' ? null : prev))}
+														onKeyDown={(e) => {
+														if (e.key === 'Escape') {
+															e.preventDefault();
+															setTopicMenuEditingTarget(null);
+															(e.currentTarget as HTMLInputElement).blur();
+															return;
+														}
+														if (e.key === 'Enter') {
+															e.preventDefault();
+															openTopic(item.id);
+														}
+													}}
+														placeholder="Folder"
+													/>
+												</div>
 													<button
 														className="text-[10px] font-bold px-2 py-1 rounded border border-[#5b79d6]/40 text-[#9bb2ff] hover:bg-[#5b79d6]/15 transition"
 														data-testid={`topic-open-${item.id}`}
