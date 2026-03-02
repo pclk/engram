@@ -57,6 +57,41 @@ const stopServer = async (proc) => {
 	await new Promise(resolve => proc.once('exit', resolve));
 };
 
+const launchBrowserOrThrowFriendlyError = async () => {
+	try {
+		return await puppeteer.launch({ headless: 'new' });
+	} catch (error) {
+		const launchErrorText = [error?.message, error?.stderr]
+			.filter(Boolean)
+			.join('\n')
+			.toLowerCase();
+		const missingDependencyPatterns = [
+			'error while loading shared libraries',
+			'libatk-1.0.so.0'
+		];
+		const hasMissingLinuxRuntimeDependency = missingDependencyPatterns
+			.some(pattern => launchErrorText.includes(pattern));
+
+		if (!hasMissingLinuxRuntimeDependency) {
+			throw error;
+		}
+
+		const friendlyError = new Error(
+			[
+				'Failed to launch Chromium for E2E tests: the host appears to be missing Chromium shared-library dependencies.',
+				'E2E requires Linux GUI/runtime libraries to be installed in the host/container image.',
+				'Optional fallback: set PUPPETEER_EXECUTABLE_PATH to a compatible system Chromium binary.',
+				'',
+				'Original launch error:',
+				error?.stack || String(error)
+			].join('\n')
+		);
+		friendlyError.name = 'PuppeteerLaunchDependencyError';
+		friendlyError.cause = error;
+		throw friendlyError;
+	}
+};
+
 const runTests = async () => {
 	const port = process.env.E2E_PORT
 		? Number(process.env.E2E_PORT)
@@ -68,7 +103,7 @@ const runTests = async () => {
 	try {
 		await waitForServer(baseUrl, SERVER_TIMEOUT_MS);
 
-		browser = await puppeteer.launch({ headless: 'new' });
+		browser = await launchBrowserOrThrowFriendlyError();
 		const page = await browser.newPage();
 		page.setDefaultTimeout(10000);
 
@@ -108,4 +143,10 @@ const runTests = async () => {
 	}
 };
 
-await runTests();
+try {
+	await runTests();
+} catch (error) {
+	console.error('E2E run failed with an explicit startup/runtime error.');
+	console.error(error?.stack || String(error));
+	process.exitCode = 1;
+}
