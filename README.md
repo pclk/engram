@@ -8,14 +8,23 @@ Engram is a modal-based study editor and Anki flashcard factory.
 
 ## Run Locally
 
-**Prerequisites:**  Node.js
-
 **Prerequisites:** Node.js
 
 1. Install dependencies:
    `npm install`
-2. (Optional) Configure app environment variables in `.env.local` (for example, `VITE_NEON_SCHEMA` and `VITE_NEON_DATA_API_URL`).
-3. Run the app:
+2. Create `.env.local`.
+3. Choose a mode:
+
+   **Authenticated mode (requires Neon):**
+   - `VITE_NEON_AUTH_URL` **(required)**
+   - `VITE_NEON_DATA_API_URL` **(required)**
+   - `VITE_NEON_SCHEMA` *(optional, defaults to `public`)*
+
+   **Guest/offline mode (no Neon env vars required):**
+   - Leave Neon vars unset.
+   - Run `npm run dev` and open `/guest`.
+
+4. Run the app:
    `npm run dev`
 
 ## Codex container setup

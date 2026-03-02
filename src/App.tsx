@@ -1,5 +1,6 @@
 import { Suspense, lazy } from 'react';
-import { Route, Routes } from 'react-router-dom';
+import { Link, Route, Routes, useLocation } from 'react-router-dom';
+import { neonConfigDiagnostics } from './lib/auth';
 
 const EngramApp = lazy(() => import('./engram'));
 const Home = lazy(() => import('./pages/home').then(module => ({ default: module.Home })));
@@ -9,6 +10,13 @@ const RouteFallback = () => <div>Loading...</div>;
 
 export default function App() {
 	const isE2E = import.meta.env.VITE_E2E === 'true';
+	const location = useLocation();
+	const isGuestRoute = location.pathname.startsWith('/guest');
+	const isAuthConfigured = neonConfigDiagnostics.isConfigured;
+
+	if (!isAuthConfigured && !isGuestRoute) {
+		return <MissingConfigPanel />;
+	}
 
 	return (
 		<Suspense fallback={<RouteFallback />}>
