@@ -8,23 +8,6 @@ const AuthShell = lazy(() => import('./pages/auth/shell').then(module => ({ defa
 
 const RouteFallback = () => <div>Loading...</div>;
 
-const MissingConfigPanel = () => (
-	<div style={{ maxWidth: 760, margin: '3rem auto', padding: '1.25rem', border: '1px solid #f59e0b', borderRadius: 12, background: '#fffbeb' }}>
-		<h2 style={{ marginTop: 0 }}>Auth configuration is missing</h2>
-		<p>
-			This build is missing required Neon variables for authenticated mode.
-		</p>
-		<ul>
-			{neonConfigDiagnostics.missingKeys.map(key => (
-				<li key={key}><code>{key}</code></li>
-			))}
-		</ul>
-		<p>
-			Set these in <code>.env.local</code> and restart the dev server, or continue in <Link to="/guest">Guest mode</Link>.
-		</p>
-	</div>
-);
-
 export default function App() {
 	const isE2E = import.meta.env.VITE_E2E === 'true';
 	const location = useLocation();
