@@ -210,6 +210,10 @@ export async function run({ page, baseUrl }) {
 	await page.keyboard.press('w');
 	const yankWEnd = findNextWord(currentText, cursor);
 	const yankWText = currentText.slice(cursor, yankWEnd);
+	const copiedMarkdownAfterYwConcept = await page.$eval('[data-testid="markdown-copy"]', el => el.textContent ?? '');
+	if (copiedMarkdownAfterYwConcept !== yankWText) {
+		throw new Error(`Expected yw markdown copy to equal yanked text. Got: "${copiedMarkdownAfterYwConcept}"`);
+	}
 	await page.keyboard.press('p');
 	const expectedYw = currentText.slice(0, cursor) + yankWText + currentText.slice(cursor);
 	await expectConceptText(page, expectedYw);
@@ -250,6 +254,10 @@ export async function run({ page, baseUrl }) {
 	await page.keyboard.press('0');
 	await page.keyboard.press('y');
 	await page.keyboard.press('y');
+	const copiedMarkdownAfterYyConcept = await page.$eval('[data-testid="markdown-copy"]', el => el.textContent ?? '');
+	if (copiedMarkdownAfterYyConcept !== currentText) {
+		throw new Error(`Expected yy markdown copy to equal current concept text. Got: "${copiedMarkdownAfterYyConcept}"`);
+	}
 	await page.keyboard.press('p');
 	const expectedYy = currentText + currentText;
 	await expectConceptText(page, expectedYy);
@@ -379,6 +387,10 @@ export async function run({ page, baseUrl }) {
 	await page.keyboard.press('0');
 	await page.keyboard.press('y');
 	await page.keyboard.press('y');
+	const copiedMarkdownAfterYyElaboration = await page.$eval('[data-testid="markdown-copy"]', el => el.textContent ?? '');
+	if (copiedMarkdownAfterYyElaboration !== afterChangeWord) {
+		throw new Error(`Expected yy markdown copy to equal current elaboration text. Got: "${copiedMarkdownAfterYyElaboration}"`);
+	}
 	await page.keyboard.press('p');
 	await expectElaborationText(page, `${afterChangeWord}${afterChangeWord}`);
 	await page.keyboard.press('u');

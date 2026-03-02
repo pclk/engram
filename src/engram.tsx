@@ -660,6 +660,7 @@ const App = () => {
 			setYankText(selected);
 			setYankBuffer(null);
 			setVisualAnchor(null);
+			void copyMarkdownToClipboard(selected);
 			showToast('Copied');
 			return;
 		}
@@ -683,19 +684,24 @@ const App = () => {
 			setYankBuffer(selection);
 			setYankText(null);
 			setVisualAnchor(null);
+			void copyMarkdownToClipboard(yankedItemsToMarkdown(selection));
 			showToast('Copied');
 			return;
 		}
 
 		if (derivIdx === -1) {
-			setYankBuffer([{ kind: 'concept', concept: currentConcept }]);
+			const selection: YankedItem[] = [{ kind: 'concept', concept: currentConcept }];
+			setYankBuffer(selection);
 			setYankText(null);
+			void copyMarkdownToClipboard(yankedItemsToMarkdown(selection));
 			showToast('Copied');
 			return;
 		}
 		if (currentDeriv) {
-			setYankBuffer([{ kind: 'derivative', derivative: currentDeriv }]);
+			const selection: YankedItem[] = [{ kind: 'derivative', derivative: currentDeriv }];
+			setYankBuffer(selection);
 			setYankText(null);
+			void copyMarkdownToClipboard(yankedItemsToMarkdown(selection));
 			showToast('Copied');
 		}
 	};
@@ -888,14 +894,43 @@ const App = () => {
 		return lines.join('\n');
 	};
 
-	const handleCopyMarkdown = async () => {
-		const markdown = topicToMarkdown(topic);
+	const derivativeToMarkdownLines = (derivative: Derivative) => {
+		const rawText = derivative.text && derivative.text.length > 0 ? derivative.text : 'Empty';
+		const textLines = rawText.split('\n');
+		if (derivative.type === 'ELABORATION') return textLines;
+		const prefix = derivative.type === 'PROBING' ? '?' : 'C';
+		return textLines.map(line => `${prefix} ${line}`);
+	};
+
+	const yankedItemsToMarkdown = (items: YankedItem[]) => {
+		const lines: string[] = [`# ${topic.title}`];
+		items.forEach(item => {
+			if (item.kind === 'concept') {
+				const conceptIndex = topic.concepts.findIndex(concept => concept.id === item.concept.id);
+				const headingIndex = conceptIndex >= 0 ? conceptIndex + 1 : '?';
+				lines.push('', `## ${headingIndex}. ${item.concept.text || 'Empty concept'}`);
+				item.concept.derivatives.forEach(derivative => {
+					lines.push(...derivativeToMarkdownLines(derivative));
+				});
+				return;
+			}
+			lines.push('', ...derivativeToMarkdownLines(item.derivative));
+		});
+		return lines.join('\n');
+	};
+
+	const copyMarkdownToClipboard = async (markdown: string) => {
 		setLastCopiedMarkdown(markdown);
 		try {
 			await navigator.clipboard.writeText(markdown);
 		} catch {
 			// ignore clipboard errors
 		}
+	};
+
+	const handleCopyMarkdown = async () => {
+		const markdown = topicToMarkdown(topic);
+		await copyMarkdownToClipboard(markdown);
 		showToast('Markdown copied');
 	};
 
@@ -1154,26 +1189,32 @@ const App = () => {
 				}
 				if (normalYankPendingRef.current) {
 					const cursorPos = normalCursorRef.current;
+					let yankedText: string | null = null;
 					if (e.key === 'w') {
 						const end = findNextWord(text, cursorPos);
-						setYankText(text.slice(cursorPos, end));
+						yankedText = text.slice(cursorPos, end);
+						setYankText(yankedText);
 						setYankBuffer(null);
 						if (end > cursorPos) triggerYankFlash(cursorPos, end - 1);
 					} else if (e.key === 'e') {
 						const end = Math.min(text.length, findEndWord(text, cursorPos) + 1);
-						setYankText(text.slice(cursorPos, end));
+						yankedText = text.slice(cursorPos, end);
+						setYankText(yankedText);
 						setYankBuffer(null);
 						if (end > cursorPos) triggerYankFlash(cursorPos, end - 1);
 					} else if (e.key === 'b') {
 						const start = findPrevWord(text, cursorPos);
-						setYankText(text.slice(start, cursorPos));
+						yankedText = text.slice(start, cursorPos);
+						setYankText(yankedText);
 						setYankBuffer(null);
 						if (cursorPos > start) triggerYankFlash(start, cursorPos - 1);
 					} else if (e.key === 'y') {
-						setYankText(text);
+						yankedText = text;
+						setYankText(yankedText);
 						setYankBuffer(null);
 						if (text.length > 0) triggerYankFlash(0, text.length - 1);
 					}
+					if (yankedText !== null) void copyMarkdownToClipboard(yankedText);
 					normalYankPendingRef.current = false;
 					setNormalYankPending(false);
 					setKeyBuffer('');
