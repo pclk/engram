@@ -18,13 +18,11 @@ interface Derivative {
 	id: string;
 	type: DerivativeType;
 	text: string;
-	aiResponse?: string;
 }
 
 interface Concept {
 	id: string;
 	text: string;
-	aiResponse?: string;
 	derivatives: Derivative[];
 }
 
@@ -68,10 +66,25 @@ const normalizeTopic = (topic: Topic): Topic => {
 	return {
 		...topic,
 		folder: typeof topic.folder === 'string' ? topic.folder : '',
-		concepts: topic.concepts.map(concept => ({
-			...concept,
-			derivatives: Array.isArray(concept.derivatives) ? concept.derivatives : []
-		}))
+		concepts: topic.concepts.map(concept => {
+			const derivatives = Array.isArray(concept.derivatives)
+				? concept.derivatives.map(derivative => {
+					const type: DerivativeType = derivative?.type === 'CLOZE' || derivative?.type === 'ELABORATION' || derivative?.type === 'PROBING'
+						? derivative.type
+						: 'PROBING';
+					return {
+						id: derivative?.id ?? generateId(),
+						type,
+						text: typeof derivative?.text === 'string' ? derivative.text : ''
+					};
+				})
+				: [];
+			return {
+				id: concept?.id ?? generateId(),
+				text: typeof concept?.text === 'string' ? concept.text : '',
+				derivatives
+			};
+		})
 	};
 };
 
@@ -641,14 +654,12 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 	const cloneDerivative = (derivative: Derivative): Derivative => ({
 		id: generateId(),
 		type: derivative.type,
-		text: derivative.text,
-		aiResponse: derivative.aiResponse
+		text: derivative.text
 	});
 
 	const cloneConcept = (concept: Concept): Concept => ({
 		id: generateId(),
 		text: concept.text,
-		aiResponse: concept.aiResponse,
 		derivatives: concept.derivatives.map(cloneDerivative)
 	});
 
