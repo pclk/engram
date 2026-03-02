@@ -4,15 +4,20 @@
 
 # Run and deploy your app
 
-This contains everything you need to run your app locally.
+Engram is a modal-based study editor and Anki flashcard factory.
 
 ## Run Locally
 
 **Prerequisites:**  Node.js
 
+**Prerequisites:** Node.js
 
 1. Install dependencies:
    `npm install`
 2. (Optional) Configure app environment variables in `.env.local` (for example, `VITE_NEON_SCHEMA` and `VITE_NEON_DATA_API_URL`).
 3. Run the app:
    `npm run dev`
+
+## Optional environment variables
+
+- `API_KEY`: Enables generation features.
