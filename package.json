@@ -10,7 +10,6 @@
     "test:e2e": "node tests/run-e2e.mjs"
   },
   "dependencies": {
-    "@google/genai": "^1.37.0",
     "@neondatabase/neon-js": "^0.1.0-beta.22",
     "react": "^19.2.3",
     "react-dom": "^19.2.3",

@@ -5,19 +5,6 @@ import { authClient, neon } from './lib/auth';
 
 // --- Configuration & Types ---
 
-const apiKey = process.env.API_KEY || process.env.GEMINI_API_KEY;
-let aiClient: any = null;
-let genAiType: any = null;
-
-const loadAi = async () => {
-	if (!apiKey) return null;
-	if (aiClient && genAiType) return { ai: aiClient, Type: genAiType };
-	const mod = await import('@google/genai');
-	aiClient = new mod.GoogleGenAI({ apiKey });
-	genAiType = mod.Type;
-	return { ai: aiClient, Type: genAiType };
-};
-
 
 type Mode = 'BLOCK' | 'NORMAL' | 'INSERT';
 type DerivativeType = 'PROBING' | 'CLOZE' | 'ELABORATION';
@@ -31,13 +18,11 @@ interface Derivative {
 	id: string;
 	type: DerivativeType;
 	text: string;
-	aiResponse?: string;
 }
 
 interface Concept {
 	id: string;
 	text: string;
-	aiResponse?: string;
 	derivatives: Derivative[];
 }
 
@@ -81,10 +66,25 @@ const normalizeTopic = (topic: Topic): Topic => {
 	return {
 		...topic,
 		folder: typeof topic.folder === 'string' ? topic.folder : '',
-		concepts: topic.concepts.map(concept => ({
-			...concept,
-			derivatives: Array.isArray(concept.derivatives) ? concept.derivatives : []
-		}))
+		concepts: topic.concepts.map(concept => {
+			const derivatives = Array.isArray(concept.derivatives)
+				? concept.derivatives.map(derivative => {
+					const type: DerivativeType = derivative?.type === 'CLOZE' || derivative?.type === 'ELABORATION' || derivative?.type === 'PROBING'
+						? derivative.type
+						: 'PROBING';
+					return {
+						id: derivative?.id ?? generateId(),
+						type,
+						text: typeof derivative?.text === 'string' ? derivative.text : ''
+					};
+				})
+				: [];
+			return {
+				id: concept?.id ?? generateId(),
+				text: typeof concept?.text === 'string' ? concept.text : '',
+				derivatives
+			};
+		})
 	};
 };
 
@@ -361,7 +361,6 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 	const [searchQuery, setSearchQuery] = useState('');
 	const [lastSearchQuery, setLastSearchQuery] = useState('');
 	const [isSearching, setIsSearching] = useState(false);
-	const [isGenerating, setIsGenerating] = useState(false);
 	const [ankifyStatus, setAnkifyStatus] = useState<'IDLE' | 'SUCCESS'>('IDLE');
 	const [isAccountOpen, setIsAccountOpen] = useState(false);
 	const [isDocumentSwitcherOpen, setIsDocumentSwitcherOpen] = useState(false);
@@ -655,14 +654,12 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 	const cloneDerivative = (derivative: Derivative): Derivative => ({
 		id: generateId(),
 		type: derivative.type,
-		text: derivative.text,
-		aiResponse: derivative.aiResponse
+		text: derivative.text
 	});
 
 	const cloneConcept = (concept: Concept): Concept => ({
 		id: generateId(),
 		text: concept.text,
-		aiResponse: concept.aiResponse,
 		derivatives: concept.derivatives.map(cloneDerivative)
 	});
 
@@ -718,7 +715,7 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 			const [start, end] = anchorIndex <= currentIndex
 				? [anchorIndex, currentIndex]
 				: [currentIndex, anchorIndex];
-			const selection = items.slice(start, end + 1).map(item =>
+			const selection: YankedItem[] = items.slice(start, end + 1).map(item =>
 				item.kind === 'concept'
 					? { kind: 'concept', concept: item.concept }
 					: { kind: 'derivative', derivative: item.derivative! }
@@ -988,55 +985,6 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 	const handleAnkify = () => {
 		setAnkifyStatus('SUCCESS');
 		setTimeout(() => setAnkifyStatus('IDLE'), 1500);
-	};
-
-	const handleGenerate = async () => {
-		if (!currentConcept || !currentConcept.text) return;
-		setIsGenerating(true);
-		try {
-			const loaded = await loadAi();
-			if (!loaded) return;
-			const { ai, Type } = loaded;
-			const response = await ai.models.generateContent({
-				model: 'gemini-3-flash-preview',
-				contents: `Generate 2 distinct study derivatives (strictly one PROBING question, one CLOZE deletion sentence) based on this concept: "${currentConcept.text}".`,
-				config: {
-					responseMimeType: 'application/json',
-					responseSchema: {
-						type: Type.ARRAY,
-						items: {
-							type: Type.OBJECT,
-							properties: {
-								type: { type: Type.STRING, enum: ['PROBING', 'CLOZE'] },
-								text: { type: Type.STRING }
-							},
-							required: ['type', 'text']
-						}
-					}
-				}
-			});
-
-			const rawText = response.text;
-			if (rawText) {
-				const data = JSON.parse(rawText) as { type: string, text: string }[];
-				const newDerivs: Derivative[] = data.map(d => ({
-					id: generateId(),
-					type: (d.type.toUpperCase() === 'PROBING' ? 'PROBING' : 'CLOZE') as DerivativeType,
-					text: d.text
-				}));
-
-				const newTopic = { ...topic, concepts: [...topic.concepts] };
-				newTopic.concepts[cursorIdx].derivatives = sortDerivatives([
-					...newTopic.concepts[cursorIdx].derivatives,
-					...newDerivs
-				]);
-				updateTopic(newTopic);
-			}
-		} catch (e) {
-			console.error("AI Generation failed", e);
-		} finally {
-			setIsGenerating(false);
-		}
 	};
 
 	const performDelete = (targetIdx: number) => {
@@ -1375,7 +1323,6 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 				}
 				if (keyBuffer === ' ') {
 					if (e.key === 'f') { setKeyBuffer(''); handleAnkify(); return; }
-					if (e.key === 'g') { setKeyBuffer(''); handleGenerate(); return; }
 					if (e.key === 'a') { setKeyBuffer(''); setTopicMenuEditingTarget(null); setIsDocumentSwitcherOpen(true); return; }
 					if (e.key === 'c') { setKeyBuffer(''); handleCopyMarkdown(); return; }
 					setKeyBuffer('');
@@ -2096,7 +2043,7 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 			);
 		}
 
-		if (mode === 'INSERT' && isFocused && !text) {
+		if (mode === 'NORMAL' && isFocused && !text) {
 			return <span className="char-cursor">&nbsp;</span>;
 		}
 		return (
@@ -2155,7 +2102,6 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 			return (
 				<div className="flex flex-col gap-2">
 					<LegendItem keys="Space + f" description="Convert all clozes into Anki cards" />
-					<LegendItem keys="Space + g" description="AI actions for the current block" />
 					<LegendItem keys="Space + a" description="Open Folders" />
 					<LegendItem keys="Space + c" description="Copy topic as Markdown" />
 					<LegendItem keys="Esc" description="Cancel leader chord" />
