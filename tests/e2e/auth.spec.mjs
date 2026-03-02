@@ -2,8 +2,27 @@ export async function run({ page, baseUrl }) {
 	const startTime = Date.now();
 	const label = 'Auth page renders';
 	console.log(`E2E Spec: ${label} - start`);
+
+	await page.goto(new URL('/', baseUrl).toString(), { waitUntil: 'domcontentloaded' });
+
+	await page.setRequestInterception(true);
+	page.on('request', request => {
+		const url = request.url();
+		const isAuthRouteChunk = /\/assets\/(auth|shell)-.*\.js$/.test(url);
+		if (!isAuthRouteChunk) {
+			request.continue();
+			return;
+		}
+		setTimeout(() => request.continue(), 200);
+	});
+
 	const url = new URL('/auth/sign-in', baseUrl).toString();
 	await page.goto(url, { waitUntil: 'domcontentloaded' });
+
+	await page.waitForFunction(
+		() => Array.from(document.querySelectorAll('div')).some(element => element.textContent?.trim() === 'Loading...'),
+		{ timeout: 10000 }
+	);
 
 	await page.waitForSelector('h1', { timeout: 10000 });
 	const heading = await page.$eval('h1', element => element.textContent?.trim());
