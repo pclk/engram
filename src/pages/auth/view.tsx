@@ -1,5 +1,14 @@
-import { AuthView } from '@neondatabase/neon-js/auth/react/ui';
+import { Suspense, lazy } from 'react';
 import { useLocation } from 'react-router-dom';
+
+import { BasicAuthView } from './basic-view';
+
+const AdvancedAuthView = lazy(() => import('./advanced-view').then(module => ({ default: module.AdvancedAuthView })));
+const FullAuthView = lazy(() =>
+	import('@neondatabase/neon-js/auth/react/ui').then(module => ({
+		default: ({ path }: { path: string }) => <module.AuthView path={path} className="neon-auth-root" />
+	}))
+);
 
 export function AuthViewPage() {
 	const location = useLocation();
@@ -17,6 +26,10 @@ export function AuthViewPage() {
 	else if (normalized.includes('sign-out')) viewPath = 'sign-out';
 	else if (normalized.includes('sign-up')) viewPath = 'sign-up';
 	else if (normalized.includes('sign-in')) viewPath = 'sign-in';
+
+	const isBasicView = ['sign-in', 'sign-up', 'forgot-password', 'magic-link'].includes(viewPath);
+	const isAdvancedView = ['callback', 'recover-account', 'reset-password', 'sign-out', 'two-factor'].includes(viewPath);
+
 	return (
 		<div className="neon-auth-page">
 			<div className="neon-auth-card">
@@ -27,7 +40,19 @@ export function AuthViewPage() {
 						<p>Sign in to your knowledge workspace</p>
 					</div>
 				</div>
-				<AuthView path={viewPath} className="neon-auth-root" />
+				<div className="neon-auth-root">
+					{isBasicView ? (
+						<BasicAuthView path={viewPath as 'forgot-password' | 'magic-link' | 'sign-in' | 'sign-up'} />
+					) : (
+						<Suspense fallback={<div>Loading...</div>}>
+							{isAdvancedView ? (
+								<AdvancedAuthView path={viewPath as 'callback' | 'recover-account' | 'reset-password' | 'sign-out' | 'two-factor'} />
+							) : (
+								<FullAuthView path={viewPath} />
+							)}
+						</Suspense>
+					)}
+				</div>
 				<div className="neon-auth-links">
 					<a href="/auth/sign-in">Sign in</a>
 					<span>•</span>
