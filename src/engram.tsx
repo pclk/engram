@@ -44,6 +44,7 @@ interface Concept {
 interface Topic {
 	id: string;
 	title: string;
+	folder: string;
 	concepts: Concept[];
 }
 
@@ -64,9 +65,10 @@ const generateId = () => {
 	return Math.random().toString(36).slice(2, 11);
 };
 
-const createEmptyTopic = (title = 'Untitled Topic'): Topic => ({
+const createEmptyTopic = (title = 'Untitled Topic', folder = ''): Topic => ({
 	id: generateId(),
 	title,
+	folder,
 	concepts: [{ id: generateId(), text: '', derivatives: [] }]
 });
 
@@ -78,6 +80,7 @@ const normalizeTopic = (topic: Topic): Topic => {
 	}
 	return {
 		...topic,
+		folder: typeof topic.folder === 'string' ? topic.folder : '',
 		concepts: topic.concepts.map(concept => ({
 			...concept,
 			derivatives: Array.isArray(concept.derivatives) ? concept.derivatives : []
@@ -391,6 +394,9 @@ const App = () => {
 	const [topicDrafts, setTopicDrafts] = useState<Record<string, string>>({
 		[INITIAL_TOPIC.id]: INITIAL_TOPIC.title
 	});
+	const [folderDrafts, setFolderDrafts] = useState<Record<string, string>>({
+		[INITIAL_TOPIC.id]: INITIAL_TOPIC.folder
+	});
 	const [topicMenuIndex, setTopicMenuIndex] = useState(0);
 	const topicMenuIndexRef = useRef(0);
 	const [topicMenuEditingId, setTopicMenuEditingId] = useState<string | null>(null);
@@ -530,18 +536,26 @@ const App = () => {
 		}
 	};
 
-	const syncTopicDraft = (id: string, title: string) => {
-		setTopicDrafts(prev => ({ ...prev, [id]: title }));
+	const syncTopicMetaDraft = (id: string, updates: { title?: string; folder?: string }) => {
+		if (updates.title !== undefined) {
+			setTopicDrafts(prev => ({ ...prev, [id]: updates.title as string }));
+		}
+		if (updates.folder !== undefined) {
+			setFolderDrafts(prev => ({ ...prev, [id]: updates.folder as string }));
+		}
 	};
 
 	const openTopic = (id: string) => {
 		const target = topics.find(item => item.id === id);
 		if (!target) return;
 		const draftTitle = topicDrafts[id] ?? target.title;
-		const resolvedTopic = draftTitle === target.title ? target : { ...target, title: draftTitle };
+		const draftFolder = folderDrafts[id] ?? target.folder;
+		const resolvedTopic = (draftTitle === target.title && draftFolder === target.folder)
+			? target
+			: { ...target, title: draftTitle, folder: draftFolder };
 		setTopics(prev => prev.map(item => (item.id === id ? resolvedTopic : item)));
 		setActiveTopicId(id);
-		syncTopicDraft(id, resolvedTopic.title);
+		syncTopicMetaDraft(id, { title: resolvedTopic.title, folder: resolvedTopic.folder });
 		resetHistory({ topic: resolvedTopic, cursorIdx: 0, derivIdx: -1 });
 		setTopicMenuEditingId(null);
 		setIsDocumentSwitcherOpen(false);
@@ -551,23 +565,34 @@ const App = () => {
 		const newTopic = createEmptyTopic();
 		setTopics(prev => [...prev, newTopic]);
 		setActiveTopicId(newTopic.id);
-		syncTopicDraft(newTopic.id, newTopic.title);
+		syncTopicMetaDraft(newTopic.id, { title: newTopic.title, folder: newTopic.folder });
 		resetHistory({ topic: newTopic, cursorIdx: 0, derivIdx: -1 });
 		setTopicMenuIndex(Math.max(0, topics.length));
 		setTopicMenuEditingId(newTopic.id);
 		queueSaveTopic(newTopic);
 	};
 
-	const renameTopic = (id: string, title: string) => {
-		syncTopicDraft(id, title);
+	const updateTopicMeta = (id: string, updates: { title?: string; folder?: string }) => {
+		syncTopicMetaDraft(id, updates);
 		setTopics(prev => prev.map(item => {
 			if (item.id !== id) return item;
-			const updated = { ...item, title };
+			const updated = {
+				...item,
+				title: updates.title ?? item.title,
+				folder: updates.folder ?? item.folder
+			};
 			queueSaveTopic(updated);
 			return updated;
 		}));
 		if (id === activeTopicId) {
-			setHState(prev => ({ ...prev, topic: { ...prev.topic, title } }));
+			setHState(prev => ({
+				...prev,
+				topic: {
+					...prev.topic,
+					title: updates.title ?? prev.topic.title,
+					folder: updates.folder ?? prev.topic.folder
+				}
+			}));
 		}
 	};
 
@@ -580,13 +605,18 @@ const App = () => {
 				: (nextTopics.find(item => item.id === activeTopicId) || nextTopics[0]);
 			if (nextActive.id !== activeTopicId) {
 				setActiveTopicId(nextActive.id);
-				syncTopicDraft(nextActive.id, nextActive.title);
+				syncTopicMetaDraft(nextActive.id, { title: nextActive.title, folder: nextActive.folder });
 				resetHistory({ topic: nextActive, cursorIdx: 0, derivIdx: -1 });
 			}
 			setTopicMenuIndex(prevIndex => Math.min(prevIndex, Math.max(0, nextTopics.length - 1)));
 			return nextTopics;
 		});
 		setTopicDrafts(prev => {
+			const next = { ...prev };
+			delete next[id];
+			return next;
+		});
+		setFolderDrafts(prev => {
 			const next = { ...prev };
 			delete next[id];
 			return next;
@@ -1109,7 +1139,22 @@ const App = () => {
 					}
 					if (e.key === 'c') {
 						const target = topics[topicMenuIndexRef.current];
-						if (target) setTopicMenuEditingId(target.id);
+						if (target) {
+							setTopicMenuEditingId(target.id);
+							window.setTimeout(() => {
+								document.querySelector<HTMLInputElement>(`[data-testid="topic-title-input-${target.id}"]`)?.focus();
+							}, 0);
+						}
+						return;
+					}
+					if (e.key === 'f') {
+						const target = topics[topicMenuIndexRef.current];
+						if (target) {
+							setTopicMenuEditingId(target.id);
+							window.setTimeout(() => {
+								document.querySelector<HTMLInputElement>(`[data-testid="topic-folder-input-${target.id}"]`)?.focus();
+							}, 0);
+						}
 						return;
 					}
 					if (e.key === 'Enter' || e.key === 'l') {
@@ -1697,6 +1742,7 @@ const App = () => {
 				setTopics(normalized);
 				setActiveTopicId(nextActive.id);
 				setTopicDrafts(normalized.reduce((acc, item) => ({ ...acc, [item.id]: item.title }), {}));
+				setFolderDrafts(normalized.reduce((acc, item) => ({ ...acc, [item.id]: item.folder }), {}));
 				resetHistory({ topic: nextActive, cursorIdx: 0, derivIdx: -1 });
 				if (!stored || stored.length === 0) saveLocalTopics(normalized, nextActive.id);
 				setIsHydrated(true);
@@ -1725,6 +1771,7 @@ const App = () => {
 				setTopics(nextTopics);
 				setActiveTopicId(nextActive.id);
 				setTopicDrafts(nextTopics.reduce((acc, item) => ({ ...acc, [item.id]: item.title }), {}));
+				setFolderDrafts(nextTopics.reduce((acc, item) => ({ ...acc, [item.id]: item.folder }), {}));
 				resetHistory({ topic: nextActive, cursorIdx: 0, derivIdx: -1 });
 				setIsHydrated(true);
 				setPersistStatus({ state: 'idle', message: 'Ready to save.' });
@@ -2092,7 +2139,7 @@ const App = () => {
 				<div className="flex flex-col gap-2">
 					<LegendItem keys="Space + f" description="Convert all clozes into Anki cards" />
 					<LegendItem keys="Space + g" description="AI actions for the current block" />
-					<LegendItem keys="Space + a" description="Open topic switcher" />
+					<LegendItem keys="Space + a" description="Open Folders" />
 					<LegendItem keys="Space + c" description="Copy topic as Markdown" />
 					<LegendItem keys="Esc" description="Cancel leader chord" />
 				</div>
@@ -2215,6 +2262,17 @@ const App = () => {
 	};
 
 	const isFocusMode = mode === 'NORMAL' || mode === 'INSERT';
+	const groupedTopics = topics.reduce((acc, item) => {
+		const folder = (folderDrafts[item.id] ?? item.folder ?? '').trim() || 'Uncategorized';
+		if (!acc[folder]) acc[folder] = [];
+		acc[folder].push(item);
+		return acc;
+	}, {} as Record<string, Topic[]>);
+	const orderedFolders = Object.keys(groupedTopics).sort((a, b) => {
+		if (a === 'Uncategorized') return 1;
+		if (b === 'Uncategorized') return -1;
+		return a.localeCompare(b);
+	});
 
 	return (
 		<div className="flex flex-col h-screen overflow-hidden font-sans">
@@ -2229,7 +2287,7 @@ const App = () => {
 						className="text-sm font-bold text-[#c0caf5] drop-shadow-[0_0_12px_rgba(26,27,38,0.9)]"
 						data-testid="topic-title"
 					>
-						{topic.title}
+						{topic.folder ? `${topic.folder}/${topic.title}` : topic.title}
 					</h1>
 					{persistStatus.state !== 'saved' && (
 						<div className="flex items-center gap-2 text-[9px] font-semibold text-[#94a0c6]">
@@ -2748,8 +2806,8 @@ const App = () => {
 					<div className="w-[min(560px,90vw)] rounded-2xl border border-[#22283a] bg-[#141821] shadow-[0_30px_80px_rgba(6,8,14,0.65)]">
 						<div className="flex items-center justify-between border-b border-[#1f2536] bg-[#171c28] px-5 py-4">
 							<div>
-								<div className="text-[11px] font-bold tracking-[0.2em] text-[#cbd3f2]">TOPICS</div>
-								<div className="text-[10px] text-[#94a0c6]">Choose a topic to open</div>
+								<div className="text-[11px] font-bold tracking-[0.2em] text-[#cbd3f2]">FOLDERS</div>
+								<div className="text-[10px] text-[#94a0c6]">Choose a note to open</div>
 							</div>
 							<button
 								className="text-[10px] font-bold px-2 py-1 rounded border border-[#5b79d6]/40 text-[#9bb2ff] hover:bg-[#5b79d6]/15 transition"
@@ -2762,68 +2820,86 @@ const App = () => {
 						<div className="p-5 space-y-4">
 							<div className="flex items-center justify-between">
 								<div>
-									<div className="text-[10px] font-bold text-[#cbd3f2]">Current topic</div>
-									<div className="mt-1 text-[12px] text-[#94a0c6]">{topic.title}</div>
+									<div className="text-[10px] font-bold text-[#cbd3f2]">Current note</div>
+									<div className="mt-1 text-[12px] text-[#94a0c6]">{topic.folder ? `${topic.folder}/${topic.title}` : topic.title}</div>
 								</div>
 								<button
 									className="text-[10px] font-bold px-2 py-1 rounded border border-[#7aa2f7]/40 text-[#9bb2ff] hover:bg-[#5b79d6]/15 transition"
 									data-testid="topic-create"
 									onClick={createTopic}
 								>
-									NEW TOPIC
+									NEW NOTE
 								</button>
 							</div>
 							<div className="rounded-lg border border-[#22283a] bg-[#161b27] px-3 py-2 text-[10px] text-[#94a0c6]">
 								{topicMenuEditingId ? (
 									<span><span className="font-bold text-[#cbd3f2]">Editing:</span> Esc finish, Enter open</span>
 								) : (
-									<span><span className="font-bold text-[#cbd3f2]">Keys:</span> j/k move, o new, c rename, Enter/l open, d delete, Esc close</span>
+									<span><span className="font-bold text-[#cbd3f2]">Keys:</span> j/k move, o new, c edit title, f edit folder, Enter/l open, d delete, Esc close</span>
 								)}
 							</div>
-							<div className="space-y-2" data-testid="topic-list">
-								{topics.map((item, index) => (
-									<div
-										key={item.id}
-										data-testid={`topic-item-${item.id}`}
-										data-selected={topics[topicMenuIndex]?.id === item.id}
-										className={`flex items-center gap-2 rounded-lg border px-3 py-2 ${item.id === activeTopicId ? 'border-[#7aa2f7]/60 bg-[#1b2131]' : 'border-[#22283a] bg-[#161b27]'} ${topics[topicMenuIndex]?.id === item.id ? 'ring-1 ring-[#ff9e64] shadow-[0_0_10px_rgba(255,158,100,0.3)]' : ''}`}
-									>
-										<input
-											className="flex-1 bg-transparent text-[12px] text-[#c0caf5] outline-none"
-											value={topicDrafts[item.id] ?? item.title}
-											data-testid={`topic-title-input-${item.id}`}
-											autoFocus={item.id === topicMenuEditingId}
-											onChange={(e) => renameTopic(item.id, e.target.value)}
-											onFocus={() => { setTopicMenuEditingId(item.id); setTopicMenuIndex(index); }}
-											onBlur={() => setTopicMenuEditingId(prev => (prev === item.id ? null : prev))}
-											onKeyDown={(e) => {
-												if (e.key === 'Escape') {
-													e.preventDefault();
-													setTopicMenuEditingId(null);
-													(e.currentTarget as HTMLInputElement).blur();
-													return;
-												}
-												if (e.key === 'Enter') {
-													e.preventDefault();
-													openTopic(item.id);
-												}
-											}}
-											placeholder="Untitled Topic"
-										/>
-										<button
-											className="text-[10px] font-bold px-2 py-1 rounded border border-[#5b79d6]/40 text-[#9bb2ff] hover:bg-[#5b79d6]/15 transition"
-											data-testid={`topic-open-${item.id}`}
-											onClick={() => openTopic(item.id)}
-										>
-											OPEN
-										</button>
-										<button
-											className="text-[10px] font-bold px-2 py-1 rounded border border-[#f27a93]/40 text-[#ff9aaa] hover:bg-[#f27a93]/15 transition"
-											data-testid={`topic-delete-${item.id}`}
-											onClick={() => deleteTopic(item.id)}
-										>
-											DELETE
-										</button>
+							<div className="space-y-3" data-testid="topic-list">
+								{orderedFolders.map(folder => (
+									<div key={folder} className="space-y-2">
+										<div className="text-[10px] font-bold tracking-[0.08em] text-[#7aa2f7]">{folder}</div>
+										{groupedTopics[folder].map(item => {
+											const index = topics.findIndex(topicItem => topicItem.id === item.id);
+											return (
+												<div
+													key={item.id}
+													data-testid={`topic-item-${item.id}`}
+													data-selected={topics[topicMenuIndex]?.id === item.id}
+													className={`flex items-center gap-2 rounded-lg border px-3 py-2 ${item.id === activeTopicId ? 'border-[#7aa2f7]/60 bg-[#1b2131]' : 'border-[#22283a] bg-[#161b27]'} ${topics[topicMenuIndex]?.id === item.id ? 'ring-1 ring-[#ff9e64] shadow-[0_0_10px_rgba(255,158,100,0.3)]' : ''}`}
+												>
+													<div className="w-full space-y-1.5">
+														<input
+															className="flex-1 bg-transparent text-[12px] text-[#c0caf5] outline-none"
+															value={topicDrafts[item.id] ?? item.title}
+															data-testid={`topic-title-input-${item.id}`}
+															autoFocus={item.id === topicMenuEditingId}
+															onChange={(e) => updateTopicMeta(item.id, { title: e.target.value })}
+															onFocus={() => { setTopicMenuEditingId(item.id); setTopicMenuIndex(index); }}
+															onBlur={() => setTopicMenuEditingId(prev => (prev === item.id ? null : prev))}
+															onKeyDown={(e) => {
+																if (e.key === 'Escape') {
+																	e.preventDefault();
+																	setTopicMenuEditingId(null);
+																	(e.currentTarget as HTMLInputElement).blur();
+																	return;
+																}
+																if (e.key === 'Enter') {
+																	e.preventDefault();
+																	openTopic(item.id);
+																}
+															}}
+															placeholder="Untitled Topic"
+														/>
+														<input
+															className="flex-1 bg-transparent text-[11px] text-[#94a0c6] outline-none"
+															value={folderDrafts[item.id] ?? item.folder}
+															data-testid={`topic-folder-input-${item.id}`}
+															onChange={(e) => updateTopicMeta(item.id, { folder: e.target.value })}
+															onFocus={() => { setTopicMenuEditingId(item.id); setTopicMenuIndex(index); }}
+															placeholder="Folder"
+														/>
+													</div>
+													<button
+														className="text-[10px] font-bold px-2 py-1 rounded border border-[#5b79d6]/40 text-[#9bb2ff] hover:bg-[#5b79d6]/15 transition"
+														data-testid={`topic-open-${item.id}`}
+														onClick={() => openTopic(item.id)}
+													>
+														OPEN
+													</button>
+													<button
+														className="text-[10px] font-bold px-2 py-1 rounded border border-[#f27a93]/40 text-[#ff9aaa] hover:bg-[#f27a93]/15 transition"
+														data-testid={`topic-delete-${item.id}`}
+														onClick={() => deleteTopic(item.id)}
+													>
+														DELETE
+													</button>
+												</div>
+											);
+										})}
 									</div>
 								))}
 							</div>
