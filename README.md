@@ -18,6 +18,15 @@ Engram is a modal-based study editor and Anki flashcard factory.
 3. Run the app:
    `npm run dev`
 
-## Optional environment variables
+## Codex container setup
 
-- `API_KEY`: Enables generation features.
+When you start a fresh Codex container, run:
+
+```bash
+./setup.sh
+```
+
+This installs Linux Chromium runtime packages (when `apt-get` is available), runs `npm ci`, creates a `.env.local` template if needed, and verifies Puppeteer Chromium library links.
+
+After running it, you can write code, run `npm run dev`, and run `npm run test:e2e`. The only manual step is setting `GEMINI_API_KEY` in `.env.local` when you want real Gemini API calls.
+
