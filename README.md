@@ -1,4 +1,4 @@
-Engram is a modal-based study editor and Anki flashcard factory.
+Engram is a vim-inspired study notetaking editor.
 
 ## Run Locally
 
