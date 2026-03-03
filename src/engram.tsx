@@ -345,6 +345,7 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 	const [mode, setMode] = useState<Mode>('BLOCK');
 	const [normalCursor, setNormalCursor] = useState(0);
 	const [keyBuffer, setKeyBuffer] = useState('');
+	const blockChordRef = useRef<{ key: 'space' | 'i' | null; at: number }>({ key: null, at: 0 });
 	const [visualAnchor, setVisualAnchor] = useState<{ kind: 'text' | 'block'; cursorIdx: number; derivIdx: number; charIndex?: number } | null>(null);
 	const [yankBuffer, setYankBuffer] = useState<YankedItem[] | null>(null);
 	const [yankText, setYankText] = useState<string | null>(null);
@@ -1501,9 +1502,17 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 
 			if (mode === 'BLOCK') {
 				e.preventDefault();
+				const hasFreshBlockChord = (expected: 'space' | 'i') => {
+					const now = Date.now();
+					return blockChordRef.current.key === expected && (now - blockChordRef.current.at) <= 450;
+				};
 				if (e.key === 'Escape' && visualAnchor) { setVisualAnchor(null); return; }
 				if (e.key === 'Escape' && keyBuffer === ' ') { setKeyBuffer(''); return; }
-				if (!keyBuffer && e.key === ' ') { setKeyBuffer(' '); return; }
+				if (!keyBuffer && e.key === ' ') {
+					blockChordRef.current = { key: 'space', at: Date.now() };
+					setKeyBuffer(' ');
+					return;
+				}
 				if (!keyBuffer && e.key === 'v') {
 					setVisualAnchor(prev => (prev && prev.kind === 'block'
 						? null
@@ -1517,7 +1526,8 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 				if (visualAnchor && e.key === 'c') {
 					if (deleteVisualBlockSelection(true)) return;
 				}
-				if (keyBuffer === ' ') {
+				if (keyBuffer === ' ' || hasFreshBlockChord('space')) {
+					blockChordRef.current = { key: null, at: 0 };
 					if (e.key === 'a') { setKeyBuffer(''); setTopicMenuEditingTarget(null); setIsDocumentSwitcherOpen(true); return; }
 					if (e.key === 'c') { setKeyBuffer(''); handleCopyMarkdown(); return; }
 					setKeyBuffer('');
@@ -1530,6 +1540,14 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 				if (e.key === 'N') { navigateSearch(lastSearchQuery, true); return; }
 
 				if (e.key === 'i') {
+					if (hasFreshBlockChord('i')) {
+						blockChordRef.current = { key: null, at: 0 };
+						if (derivIdx !== -1 && !currentDeriv) return;
+						setMode('INSERT');
+						setNormalCursor(0);
+						return;
+					}
+					blockChordRef.current = { key: 'i', at: Date.now() };
 					if (derivIdx !== -1 && !currentDeriv) return;
 					setMode('NORMAL');
 					setNormalCursor(0);
