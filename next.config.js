@@ -30,6 +30,9 @@ const securityHeaders = [
 
 const nextConfig = {
   reactStrictMode: true,
+  typescript: {
+    tsconfigPath: './tsconfig.app.json'
+  },
   async headers() {
     return [
       {
