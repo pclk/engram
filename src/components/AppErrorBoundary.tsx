@@ -35,19 +35,19 @@ export class AppErrorBoundary extends Component<AppErrorBoundaryProps, AppErrorB
 						display: 'grid',
 						placeItems: 'center',
 						padding: '1.5rem',
-						background: '#fff5f5',
-						color: '#7f1d1d',
+						background: '#1a1b26',
+						color: '#c0caf5',
 					}}
 				>
 					<section
 						style={{
 							maxWidth: '40rem',
 							width: '100%',
-							background: '#ffffff',
-							border: '1px solid #fecaca',
+							background: '#24283b',
+							border: '1px solid #414868',
 							borderRadius: '0.75rem',
 							padding: '1.25rem',
-							boxShadow: '0 8px 24px rgba(127, 29, 29, 0.08)',
+							boxShadow: '0 8px 24px rgba(0, 0, 0, 0.35)',
 						}}
 					>
 						<h1 style={{ marginTop: 0 }}>Something went wrong</h1>

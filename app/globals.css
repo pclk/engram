@@ -5,3 +5,25 @@
 @import '../src/auth-theme.css';
 @import '../src/engram-markdown.css';
 @import '@neondatabase/neon-js/ui/css';
+
+:root {
+  --app-background: #1a1b26;
+  --app-foreground: #c0caf5;
+}
+
+html,
+body {
+  min-height: 100%;
+  margin: 0;
+  background-color: var(--app-background);
+  color: var(--app-foreground);
+}
+
+body {
+  min-height: 100vh;
+}
+
+main,
+#root {
+  min-height: 100%;
+}
