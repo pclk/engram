@@ -4,17 +4,11 @@
 -- Extensions
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
--- App users (auth-owned identities)
-CREATE TABLE IF NOT EXISTS app_users (
-	id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-	email TEXT UNIQUE,
-	created_at TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-
 -- Engram topics: each topic stores a topic tree in JSONB
+-- owner_id should be validated against Neon Auth user IDs at the application or RLS layer
 CREATE TABLE IF NOT EXISTS engram_topics (
 	id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-	owner_id UUID NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+	owner_id UUID NOT NULL,
 	title TEXT NOT NULL,
 	topic JSONB NOT NULL,
 	created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
