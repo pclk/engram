@@ -32,7 +32,7 @@ export const topicRecordSchema = z.object({
 export const contentUpsertRequestSchema = z.object({
 	id: z.string().uuid().optional(),
 	title: z.string().min(1).max(200),
-	topic: topicContentSchema
+	topic: topicSchema
 });
 
 export const contentDeleteRequestSchema = z.object({
@@ -42,7 +42,7 @@ export const contentDeleteRequestSchema = z.object({
 export const contentRowSchema = z.object({
 	id: z.string().uuid(),
 	title: z.string(),
-	topic: topicContentSchema,
+	topic: topicSchema,
 	created_at: z.string().datetime().optional(),
 	updated_at: z.string().datetime().optional()
 });
@@ -60,6 +60,7 @@ export const deleteContentResponseSchema = z.object({
 		id: z.string().uuid(),
 		deleted: z.boolean()
 	})
+});
 export const saveTopicRequestSchema = z.object({
   title: z.string().min(1).max(200),
   topic: topicSchema,
