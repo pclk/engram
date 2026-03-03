@@ -10,7 +10,7 @@ Engram is a modal-based study editor and Anki flashcard factory.
 
 **Prerequisites:** Node.js
 
-1. Install dependencies:
+1. Install dependencies (canonical package manager: **npm**):
    `npm install`
 2. Create `.env.local`.
 3. Configure environment variables:
@@ -48,11 +48,15 @@ Engram is a modal-based study editor and Anki flashcard factory.
 
 ### CI command matrix
 
+> Lockfile policy: this repository uses **npm** and the canonical lockfile is `package-lock.json`. Do not commit `pnpm-lock.yaml`.
+
+
 - Lint: `npm run ci:lint`
 - Typecheck: `npm run ci:typecheck`
 - Unit tests: `npm run ci:unit`
 - E2E tests: `npm run ci:e2e`
-- Security audit: `npm run ci:audit` (runs `pnpm audit`)
+- Security audit: `npm run ci:audit` (runs `npm audit`)
+- Lockfile guard: `npm run ci:lockfile`
 - Full CI sequence: `npm run ci`
 
 ## Codex container setup
