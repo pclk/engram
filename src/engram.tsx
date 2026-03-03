@@ -1,11 +1,5 @@
 "use client";
 
-import React, { useState, useEffect, useRef, useLayoutEffect, useCallback } from 'react';
-import Image from 'next/image';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
-import { authClient } from './lib/auth';
-import { authFetch } from './lib/api-client';
 import React, {
   useState,
   useEffect,
@@ -17,24 +11,23 @@ import Image from "next/image";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { authClient } from "./lib/auth";
+import { authFetch } from "./lib/api-client";
 import {
   changePasswordSchema,
   updateAvatarSchema,
   updateProfileSchema,
 } from "@/lib/schemas/auth";
 import {
-	deleteContentResponseSchema,
-	listContentResponseSchema,
-	contentUpsertRequestSchema,
-	upsertContentResponseSchema,
-	toTopicContent
-} from '@/lib/schemas/content';
-import type { Concept, Derivative, DerivativeType, TopicContent as Topic } from '@/lib/schemas/topic';
+  contentUpsertRequestSchema,
+  deleteContentResponseSchema,
   deleteTopicResponseSchema,
+  listContentResponseSchema,
   listTopicsResponseSchema,
   saveTopicRequestSchema,
   saveTopicResponseSchema,
   topicSchema,
+  toTopicContent,
+  upsertContentResponseSchema,
 } from "@/lib/schemas/content";
 
 // --- Configuration & Types ---
@@ -78,18 +71,16 @@ const LOCAL_TOPICS_KEY = "engram.topics.v1";
 const LOCAL_ACTIVE_TOPIC_KEY = "engram.activeTopicId.v1";
 
 const generateId = () => {
-	const webCrypto = typeof globalThis !== 'undefined' ? globalThis.crypto : undefined;
-	if (webCrypto?.randomUUID) return webCrypto.randomUUID();
-	const bytes = new Uint8Array(16);
-	if (webCrypto?.getRandomValues) webCrypto.getRandomValues(bytes);
-	else for (let i = 0; i < bytes.length; i += 1) bytes[i] = Math.floor(Math.random() * 256);
-	bytes[6] = (bytes[6] & 0x0f) | 0x40;
-	bytes[8] = (bytes[8] & 0x3f) | 0x80;
-	const hex = Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('');
-	return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
-  if (typeof crypto !== "undefined" && "randomUUID" in crypto)
-    return crypto.randomUUID();
-  return Math.random().toString(36).slice(2, 11);
+  const webCrypto =
+    typeof globalThis !== "undefined" ? globalThis.crypto : undefined;
+  if (webCrypto?.randomUUID) return webCrypto.randomUUID();
+  const bytes = new Uint8Array(16);
+  if (webCrypto?.getRandomValues) webCrypto.getRandomValues(bytes);
+  else for (let i = 0; i < bytes.length; i += 1) bytes[i] = Math.floor(Math.random() * 256);
+  bytes[6] = (bytes[6] & 0x0f) | 0x40;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const hex = Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 };
 
 const createEmptyTopic = (title = "Untitled Topic", folder = ""): Topic => ({
