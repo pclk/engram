@@ -11,10 +11,10 @@ import {
 	updateProfileSchema
 } from '@/lib/schemas/auth';
 import {
-	deleteTopicResponseSchema,
-	listTopicsResponseSchema,
-	saveTopicRequestSchema,
-	saveTopicResponseSchema,
+	deleteContentResponseSchema,
+	listContentResponseSchema,
+	contentUpsertRequestSchema,
+	upsertContentResponseSchema,
 	toTopicContent
 } from '@/lib/schemas/content';
 import type { Concept, Derivative, DerivativeType, TopicContent as Topic } from '@/lib/schemas/topic';
@@ -42,7 +42,13 @@ const LOCAL_ACTIVE_TOPIC_KEY = 'engram.activeTopicId.v1';
 
 const generateId = () => {
 	if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) return crypto.randomUUID();
-	return Math.random().toString(36).slice(2, 11);
+	const bytes = new Uint8Array(16);
+	if (typeof crypto !== 'undefined' && 'getRandomValues' in crypto) crypto.getRandomValues(bytes);
+	else for (let i = 0; i < bytes.length; i += 1) bytes[i] = Math.floor(Math.random() * 256);
+	bytes[6] = (bytes[6] & 0x0f) | 0x40;
+	bytes[8] = (bytes[8] & 0x3f) | 0x80;
+	const hex = Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('');
+	return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 };
 
 const createEmptyTopic = (title = 'Untitled Topic', folder = ''): Topic => ({
@@ -214,6 +220,9 @@ const clampStyle = (shouldClamp: boolean): React.CSSProperties => (
 			WebkitBoxOrient: 'initial'
 		}
 );
+
+const isUuid = (value: string) =>
+	/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
 
 const smoothScrollTo = (
 	container: HTMLElement,
@@ -405,13 +414,13 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 	}>(() => ({ state: 'idle' }));
 	const saveTimersRef = useRef<Record<string, number>>({});
 	const lastSavedRef = useRef<Record<string, string>>({});
+	const remoteTopicIdsRef = useRef<Set<string>>(new Set());
 
 	const currentConcept = topic.concepts[cursorIdx];
 	const currentDeriv = (derivIdx >= 0 && currentConcept && currentConcept.derivatives.length > derivIdx)
 		? currentConcept.derivatives[derivIdx]
 		: null;
 	const userId = (user?.id || null) as string | null;
-	const userEmail = (user?.email || null) as string | null;
 	const persistMessage = persistStatus.message
 		?? (persistStatus.state === 'error' ? 'Unknown persistence error.' : undefined);
 
@@ -420,7 +429,7 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 		if (typeof error === 'string') return error;
 		const errorObj = error as { code?: string; message?: string; details?: string; hint?: string } | null;
 		if (errorObj?.code === 'PGRST205') {
-			return "Missing required table engram_topics. Run Prisma migrations and regenerate client.";
+			return 'Missing required table engram_topics.';
 		}
 		if (error instanceof Error) {
 			if (error.name === 'AuthRequiredError') return 'Auth token missing. Please sign in again.';
@@ -433,6 +442,34 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 		}
 	}, []);
 
+	const remapTopicId = useCallback((prevId: string, nextId: string) => {
+		if (prevId === nextId) return;
+		setTopics(prev => prev.map(item => (item.id === prevId ? { ...item, id: nextId } : item)));
+		setTopicDrafts(prev => {
+			if (!(prevId in prev)) return prev;
+			const { [prevId]: existing, ...rest } = prev;
+			return { ...rest, [nextId]: existing };
+		});
+		setFolderDrafts(prev => {
+			if (!(prevId in prev)) return prev;
+			const { [prevId]: existing, ...rest } = prev;
+			return { ...rest, [nextId]: existing };
+		});
+		setActiveTopicId(prev => (prev === prevId ? nextId : prev));
+		setHState(prev => (prev.topic.id === prevId ? { ...prev, topic: { ...prev.topic, id: nextId } } : prev));
+		const timer = saveTimersRef.current[prevId];
+		if (timer) {
+			saveTimersRef.current[nextId] = timer;
+			delete saveTimersRef.current[prevId];
+		}
+		if (lastSavedRef.current[prevId]) {
+			lastSavedRef.current[nextId] = lastSavedRef.current[prevId];
+			delete lastSavedRef.current[prevId];
+		}
+		remoteTopicIdsRef.current.delete(prevId);
+		remoteTopicIdsRef.current.add(nextId);
+	}, []);
+
 	const queueSaveTopic = useCallback((nextTopic: Topic) => {
 		if (useLocalPersistence || !userId || !isHydrated) return;
 		const normalized = normalizeTopic(nextTopic);
@@ -442,30 +479,44 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 		if (existingTimer) window.clearTimeout(existingTimer);
 		saveTimersRef.current[normalized.id] = window.setTimeout(async () => {
 			try {
-				setPersistStatus({ state: 'saving', message: 'Saving with Prisma…' });
-				const payload = saveTopicRequestSchema.parse({ userId, userEmail, topic: normalized });
-				const response = await fetch('/api/content/topics', {
-					method: 'POST',
+				setPersistStatus({ state: 'saving', message: 'Saving content…' });
+				const payload = contentUpsertRequestSchema.parse({
+					id: isUuid(normalized.id) ? normalized.id : undefined,
+					title: normalized.title,
+					topic: normalized
+				});
+				const shouldUpdate = !!payload.id && remoteTopicIdsRef.current.has(payload.id);
+				let response = await fetch('/api/content', {
+					method: shouldUpdate ? 'PUT' : 'POST',
 					headers: { 'Content-Type': 'application/json' },
 					body: JSON.stringify(payload)
 				});
+				if (!response.ok && shouldUpdate) {
+					response = await fetch('/api/content', {
+						method: 'POST',
+						headers: { 'Content-Type': 'application/json' },
+						body: JSON.stringify({ title: payload.title, topic: payload.topic })
+					});
+				}
 				if (!response.ok) throw new Error(`Save failed (${response.status})`);
-				const data = saveTopicResponseSchema.parse(await response.json());
-				const storedSerialized = stableStringify(data.topic.topic ?? null);
+				const data = upsertContentResponseSchema.parse(await response.json());
+				if (data.data.id !== normalized.id) remapTopicId(normalized.id, data.data.id);
+				const storedSerialized = stableStringify(data.data.topic ?? null);
 				if (storedSerialized !== serialized) {
 					setPersistStatus({ state: 'mismatch', message: 'Saved, but verification mismatch (JSON order/shape).' });
-					console.warn('Persistence mismatch', { expected: normalized, actual: data.topic.topic });
+					console.warn('Persistence mismatch', { expected: normalized, actual: data.data.topic });
 					return;
 				}
-				lastSavedRef.current[normalized.id] = serialized;
-				setPersistStatus({ state: 'saved', message: 'Saved with Prisma', at: Date.now() });
+				lastSavedRef.current[data.data.id] = serialized;
+				remoteTopicIdsRef.current.add(data.data.id);
+				setPersistStatus({ state: 'saved', message: 'Saved', at: Date.now() });
 			} catch (error) {
 				console.error('Failed to save topic', error);
 				const message = formatPersistError(error);
 				setPersistStatus({ state: 'error', message });
 			}
 		}, 400);
-	}, [formatPersistError, isHydrated, useLocalPersistence, userEmail, userId]);
+	}, [formatPersistError, isHydrated, remapTopicId, useLocalPersistence, userId]);
 
 	const deletePersistedTopic = async (topicId: string) => {
 		if (useLocalPersistence || !userId || !isHydrated) return;
@@ -474,11 +525,12 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 		delete saveTimersRef.current[topicId];
 		delete lastSavedRef.current[topicId];
 		try {
-			const response = await fetch(`/api/content/topics/${topicId}?userId=${encodeURIComponent(userId)}`, {
+			const response = await fetch(`/api/content?id=${encodeURIComponent(topicId)}`, {
 				method: 'DELETE'
 			});
 			if (!response.ok) throw new Error(`Delete failed (${response.status})`);
-			deleteTopicResponseSchema.parse(await response.json());
+			deleteContentResponseSchema.parse(await response.json());
+			remoteTopicIdsRef.current.delete(topicId);
 		} catch (error) {
 			console.error('Failed to delete topic', error);
 		}
@@ -1662,10 +1714,14 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 			}
 			if (!userId) return;
 			try {
-				const response = await fetch(`/api/content/topics?userId=${encodeURIComponent(userId)}`);
+				const response = await fetch('/api/content');
 				if (!response.ok) throw new Error(`Load failed (${response.status})`);
-				const payload = listTopicsResponseSchema.parse(await response.json());
-				const normalized = payload.topics.map(row => normalizeTopic(toTopicContent(row.topic)));
+				const payload = listContentResponseSchema.parse(await response.json());
+				const normalized = payload.data.map(row => {
+					remoteTopicIdsRef.current.add(row.id);
+					const content = toTopicContent(row.topic);
+					return normalizeTopic({ ...content, id: row.id, title: row.title });
+				});
 				const nextTopics = normalized.length ? normalized : [createEmptyTopic('Untitled Topic')];
 				const nextActive = nextTopics[0];
 				if (!isActive) return;
@@ -1689,7 +1745,7 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 		return () => {
 			isActive = false;
 		};
-	}, [formatPersistError, isHydrated, queueSaveTopic, resetHistory, userId, userEmail, useLocalPersistence]);
+	}, [formatPersistError, isHydrated, queueSaveTopic, resetHistory, userId, useLocalPersistence]);
 
 	useEffect(() => {
 		normalCursorRef.current = normalCursor;
