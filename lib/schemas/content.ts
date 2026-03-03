@@ -8,29 +8,35 @@ import {
 
 export { topicContentSchema, topicTransportSchema, toTopicContent, toTopicTransport };
 
-export const saveTopicRequestSchema = z.object({
-	userId: z.string().uuid(),
-	userEmail: z.string().email().nullable().optional(),
+export const contentUpsertRequestSchema = z.object({
+	id: z.string().uuid().optional(),
+	title: z.string().min(1).max(200),
 	topic: topicContentSchema
 });
 
-export const listTopicsRequestSchema = z.object({
-	userId: z.string().uuid()
+export const contentDeleteRequestSchema = z.object({
+	id: z.string().uuid()
 });
 
-export const deleteTopicRequestSchema = z.object({
-	userId: z.string().uuid(),
-	topicId: z.string().uuid()
+export const contentRowSchema = z.object({
+	id: z.string().uuid(),
+	title: z.string(),
+	topic: topicContentSchema,
+	created_at: z.string().datetime().optional(),
+	updated_at: z.string().datetime().optional()
 });
 
-export const listTopicsResponseSchema = z.object({
-	topics: z.array(topicTransportSchema)
+export const listContentResponseSchema = z.object({
+	data: z.array(contentRowSchema)
 });
 
-export const saveTopicResponseSchema = z.object({
-	topic: topicTransportSchema
+export const upsertContentResponseSchema = z.object({
+	data: contentRowSchema
 });
 
-export const deleteTopicResponseSchema = z.object({
-	deleted: z.boolean()
+export const deleteContentResponseSchema = z.object({
+	data: z.object({
+		id: z.string().uuid(),
+		deleted: z.boolean()
+	})
 });
