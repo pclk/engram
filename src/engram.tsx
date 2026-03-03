@@ -370,6 +370,8 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 		}
 	});
 	const [sessionData, setSessionData] = useState<any>(null);
+	const [authSyncError, setAuthSyncError] = useState<string | null>(null);
+	const [isAuthSynced, setIsAuthSynced] = useState(false);
 	const [profileForm, setProfileForm] = useState({ name: '', email: '' });
 	const [profileStatus, setProfileStatus] = useState<{ type: 'idle' | 'saving' | 'success' | 'error'; message?: string }>({ type: 'idle' });
 	const [avatarStatus, setAvatarStatus] = useState<{ type: 'idle' | 'saving' | 'success' | 'error'; message?: string }>({ type: 'idle' });
@@ -417,6 +419,15 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 	const userEmail = (user?.email || null) as string | null;
 	const persistMessage = persistStatus.message
 		?? (persistStatus.state === 'error' ? 'Unknown persistence error.' : undefined);
+	const authSyncInFlightRef = useRef<Promise<void> | null>(null);
+	const getAccessTokenFromSession = useCallback((sessionPayload: any): string | null => {
+		if (!sessionPayload) return null;
+		const token = sessionPayload?.tokens?.accessToken
+			?? sessionPayload?.session?.token
+			?? sessionPayload?.session?.accessToken
+			?? null;
+		return typeof token === 'string' && token.length > 0 ? token : null;
+	}, []);
 
 	const formatPersistError = useCallback((error: unknown) => {
 		if (!error) return 'Unknown persistence error.';
@@ -478,9 +489,66 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 	const requestWithAuth = useCallback((path: string, init?: RequestInit) => {
 		return authFetch(path, init, { onUnauthorized: handleUnauthorized });
 	}, [handleUnauthorized]);
+	const syncAuthCookie = useCallback(async (sessionPayload?: any) => {
+		if (useLocalPersistence) {
+			setAuthSyncError(null);
+			setIsAuthSynced(true);
+			return;
+		}
+		const session = sessionPayload ?? sessionData;
+		const accessToken = getAccessTokenFromSession(session);
+		if (!accessToken) {
+			setIsAuthSynced(false);
+			setAuthSyncError('Auth token missing. Please sign in again.');
+			throw new Error('Auth token missing.');
+		}
+		if (authSyncInFlightRef.current) {
+			await authSyncInFlightRef.current;
+			return;
+		}
+
+		const attemptSync = async () => {
+			const maxAttempts = 3;
+			for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+				try {
+					const response = await fetch('/api/auth', {
+						method: 'POST',
+						headers: { 'Content-Type': 'application/json' },
+						credentials: 'include',
+						body: JSON.stringify({ accessToken })
+					});
+					if (!response.ok) throw new Error(`Auth bootstrap failed (${response.status}).`);
+					setAuthSyncError(null);
+					setIsAuthSynced(true);
+					return;
+				} catch (error) {
+					if (attempt === maxAttempts) {
+						setIsAuthSynced(false);
+						setAuthSyncError(formatPersistError(error));
+						throw error;
+					}
+					const backoffMs = 300 * 2 ** (attempt - 1);
+					await new Promise(resolve => setTimeout(resolve, backoffMs));
+				}
+			}
+		};
+
+		authSyncInFlightRef.current = attemptSync().finally(() => {
+			authSyncInFlightRef.current = null;
+		});
+		await authSyncInFlightRef.current;
+	}, [formatPersistError, getAccessTokenFromSession, sessionData, useLocalPersistence]);
+
+	const verifyServerSession = useCallback(async () => {
+		if (useLocalPersistence) return;
+		const response = await fetch('/api/session', { credentials: 'include' });
+		if (!response.ok) throw new Error(`Session verification failed (${response.status}).`);
+		const payload = await response.json();
+		if (!payload?.data?.user?.id) throw new Error('Session verification failed (missing authenticated user).');
+	}, [useLocalPersistence]);
 
 	const queueSaveTopic = useCallback((nextTopic: Topic) => {
-		if (useLocalPersistence || !userId || !isHydrated) return;
+		if (useLocalPersistence || !userId || !isHydrated || !isAuthSynced) return;
 		const normalized = normalizeTopic(nextTopic);
 		const serialized = stableStringify(normalized);
 		if (lastSavedRef.current[normalized.id] === serialized) return;
@@ -512,9 +580,10 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 			}
 		}, 400);
 	}, [formatPersistError, isHydrated, requestWithAuth, useLocalPersistence, userEmail, userId]);
+	}, [formatPersistError, isAuthSynced, isHydrated, useLocalPersistence, userEmail, userId]);
 
 	const deletePersistedTopic = async (topicId: string) => {
-		if (useLocalPersistence || !userId || !isHydrated) return;
+		if (useLocalPersistence || !userId || !isHydrated || !isAuthSynced) return;
 		const existingTimer = saveTimersRef.current[topicId];
 		if (existingTimer) window.clearTimeout(existingTimer);
 		delete saveTimersRef.current[topicId];
@@ -1640,6 +1709,13 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 		if (guestMode) return;
 		const { data } = await auth.getSession();
 		setSessionData(data ?? null);
+		if (getAccessTokenFromSession(data)) {
+			try {
+				await syncAuthCookie(data);
+			} catch (error) {
+				console.error('Failed to bootstrap auth cookie', error);
+			}
+		}
 	};
 
 	useEffect(() => {
@@ -1647,13 +1723,44 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 		const fetchSession = async () => {
 			if (guestMode) return;
 			const { data } = await auth.getSession();
-			if (isActive) setSessionData(data ?? null);
+			if (!isActive) return;
+			setSessionData(data ?? null);
+			if (getAccessTokenFromSession(data)) {
+				try {
+					await syncAuthCookie(data);
+				} catch (error) {
+					console.error('Failed to bootstrap auth cookie', error);
+				}
+			}
 		};
 		fetchSession();
 		return () => {
 			isActive = false;
 		};
-	}, [auth, isAccountOpen, guestMode]);
+	}, [auth, getAccessTokenFromSession, isAccountOpen, guestMode, syncAuthCookie]);
+
+	useEffect(() => {
+		if (guestMode) return;
+		const maybeSubscribe = (auth as any)?.onAuthStateChange ?? (auth as any)?.onAuthStateChanged;
+		if (typeof maybeSubscribe !== 'function') return;
+		const subscription = maybeSubscribe.call(auth, async (event: string, payload: any) => {
+			setSessionData(payload ?? null);
+			if (!getAccessTokenFromSession(payload)) {
+				setIsAuthSynced(false);
+				setAuthSyncError(null);
+				return;
+			}
+			try {
+				await syncAuthCookie(payload);
+			} catch (error) {
+				console.error(`Failed to sync auth cookie on ${event}`, error);
+			}
+		});
+		return () => {
+			const unsubscribe = subscription?.unsubscribe ?? subscription;
+			if (typeof unsubscribe === 'function') unsubscribe();
+		};
+	}, [auth, getAccessTokenFromSession, guestMode, syncAuthCookie]);
 
 	useEffect(() => {
 		setProfileForm({
@@ -1672,10 +1779,17 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 			setPersistStatus({ state: 'error', message: 'Not signed in. Persistence disabled.' });
 			return;
 		}
+		if (!isAuthSynced) {
+			setPersistStatus({
+				state: 'error',
+				message: authSyncError ?? 'Authenticating persistence session…'
+			});
+			return;
+		}
 		if (!isHydrated) {
 			setPersistStatus({ state: 'idle', message: 'Loading topics…' });
 		}
-	}, [useLocalPersistence, userId, isHydrated]);
+	}, [authSyncError, isAuthSynced, useLocalPersistence, userId, isHydrated]);
 
 	useEffect(() => {
 		if (!useLocalPersistence) return;
@@ -1707,8 +1821,11 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 				return;
 			}
 			if (!userId) return;
+			if (!isAuthSynced) return;
 			try {
 				const response = await requestWithAuth(`/api/content/topics?userId=${encodeURIComponent(userId)}`);
+				await verifyServerSession();
+				const response = await fetch(`/api/content/topics?userId=${encodeURIComponent(userId)}`);
 				if (!response.ok) throw new Error(`Load failed (${response.status})`);
 				const payload = listTopicsResponseSchema.parse(await response.json());
 				const normalized = payload.topics.map(row => normalizeTopic(toTopicContent(row.topic)));
@@ -1736,6 +1853,7 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 			isActive = false;
 		};
 	}, [formatPersistError, isHydrated, queueSaveTopic, requestWithAuth, resetHistory, userId, userEmail, useLocalPersistence]);
+	}, [formatPersistError, isAuthSynced, isHydrated, queueSaveTopic, resetHistory, userId, userEmail, useLocalPersistence, verifyServerSession]);
 
 	useEffect(() => {
 		normalCursorRef.current = normalCursor;
@@ -2512,8 +2630,11 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 									className="text-[10px] font-bold px-2 py-1 rounded border border-[#f27a93]/40 text-[#ff9aaa] hover:bg-[#f27a93]/15 transition"
 									onClick={async () => {
 										try {
+											await fetch('/api/auth', { method: 'DELETE', credentials: 'include' });
 											await auth.signOut({ fetchOptions: { throw: true } });
 										} finally {
+											setIsAuthSynced(false);
+											setAuthSyncError(null);
 											setIsAccountOpen(false);
 											window.location.href = '/auth/sign-in';
 										}
