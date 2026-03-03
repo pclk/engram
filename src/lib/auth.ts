@@ -9,6 +9,8 @@ type NeonConfig = {
 	dataApiUrl: string;
 };
 
+type RuntimeNeonEnv = Partial<Record<NeonRequiredEnvKey, string>>;
+
 export class MissingNeonConfigError extends Error {
 	readonly code = 'MISSING_NEON_CONFIG';
 
@@ -18,7 +20,18 @@ export class MissingNeonConfigError extends Error {
 	}
 }
 
+const readRuntimeEnv = (key: NeonRequiredEnvKey): string | null => {
+	if (typeof window === 'undefined') return null;
+	const runtimeEnv = (window as typeof window & { __ENGRAM_RUNTIME_ENV?: RuntimeNeonEnv }).__ENGRAM_RUNTIME_ENV;
+	const value = runtimeEnv?.[key];
+	if (typeof value !== 'string') return null;
+	const trimmed = value.trim();
+	return trimmed.length ? trimmed : null;
+};
+
 const readEnv = (key: NeonRequiredEnvKey): string | null => {
+	const runtimeValue = readRuntimeEnv(key);
+	if (runtimeValue) return runtimeValue;
 	const value = process.env[key];
 	if (typeof value !== 'string') return null;
 	const trimmed = value.trim();
