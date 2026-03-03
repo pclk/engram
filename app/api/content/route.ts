@@ -1,9 +1,10 @@
 import { z } from 'zod';
+import { toTopicContent } from '@/lib/schemas/topic';
 import { errorResponse, parseJson } from '@/src/server/api/http';
 import { requireAuth } from '@/src/server/api/auth';
 import { neonServer, neonServerDiagnostics } from '@/src/server/api/neon';
 
-const topicSchema = z.object({
+const contentPayloadSchema = z.object({
   id: z.string().uuid().optional(),
   title: z.string().min(1).max(200),
   topic: z.record(z.string(), z.unknown())
@@ -13,7 +14,7 @@ const querySchema = z.object({
   id: z.string().uuid().optional()
 });
 
-const updateSchema = topicSchema.extend({
+const updateSchema = contentPayloadSchema.extend({
   id: z.string().uuid()
 });
 
@@ -66,7 +67,7 @@ export async function POST(request: Request) {
   const neonError = guardNeon();
   if (neonError) return neonError;
 
-  const body = await parseJson(request, topicSchema);
+  const body = await parseJson(request, contentPayloadSchema);
   if (!body.ok) return body.response;
 
   const { data, error } = await neonServer!
@@ -74,7 +75,7 @@ export async function POST(request: Request) {
     .insert({
       owner_id: authResult.auth.userId,
       title: body.data.title,
-      topic: body.data.topic
+      topic: toTopicContent(body.data.topic)
     })
     .select('id, title, topic, created_at, updated_at')
     .single();
@@ -98,7 +99,7 @@ export async function PUT(request: Request) {
 
   const { data, error } = await neonServer!
     .from('engram_topics')
-    .update({ title: body.data.title, topic: body.data.topic })
+    .update({ title: body.data.title, topic: toTopicContent(body.data.topic) })
     .eq('id', body.data.id)
     .eq('owner_id', authResult.auth.userId)
     .select('id, title, topic, created_at, updated_at')

@@ -15,38 +15,19 @@ import {
 	listTopicsResponseSchema,
 	saveTopicRequestSchema,
 	saveTopicResponseSchema,
-	topicSchema
+	toTopicContent
 } from '@/lib/schemas/content';
+import type { Concept, Derivative, DerivativeType, TopicContent as Topic } from '@/lib/schemas/topic';
 
 // --- Configuration & Types ---
 
 
 type Mode = 'BLOCK' | 'NORMAL' | 'INSERT';
-type DerivativeType = 'PROBING' | 'CLOZE' | 'ELABORATION';
 type YankedItem =
 	| { kind: 'concept'; concept: Concept }
 	| { kind: 'derivative'; derivative: Derivative };
 
 const NORMAL_FAST_RENDER_LIMIT = 2000;
-
-interface Derivative {
-	id: string;
-	type: DerivativeType;
-	text: string;
-}
-
-interface Concept {
-	id: string;
-	text: string;
-	derivatives: Derivative[];
-}
-
-interface Topic {
-	id: string;
-	title: string;
-	folder: string;
-	concepts: Concept[];
-}
 
 // History State
 interface HistoryState {
@@ -1684,7 +1665,7 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 				const response = await fetch(`/api/content/topics?userId=${encodeURIComponent(userId)}`);
 				if (!response.ok) throw new Error(`Load failed (${response.status})`);
 				const payload = listTopicsResponseSchema.parse(await response.json());
-				const normalized = payload.topics.map(row => normalizeTopic(topicSchema.parse(row.topic)));
+				const normalized = payload.topics.map(row => normalizeTopic(toTopicContent(row.topic)));
 				const nextTopics = normalized.length ? normalized : [createEmptyTopic('Untitled Topic')];
 				const nextActive = nextTopics[0];
 				if (!isActive) return;

@@ -1,26 +1,50 @@
 import { describe, expect, it } from 'vitest';
-import { topicSchema } from '@/src/lib/schemas/topic';
+import { topicContentSchema, topicTransportSchema, toTopicTransport } from '@/lib/schemas/topic';
 
-describe('topicSchema', () => {
-  it('accepts valid payloads', () => {
-    const parsed = topicSchema.parse({
-      id: '4a0f9f3b-5f30-4d37-ae8f-13a6d5f1831a',
-      title: 'Cardiology',
-      folderId: null,
-      createdAt: '2026-01-01T00:00:00.000Z',
-    });
+describe('topicContentSchema', () => {
+	it('accepts valid topic content payloads', () => {
+		const parsed = topicContentSchema.parse({
+			id: 'topic-1',
+			title: 'Cardiology',
+			folder: '',
+			concepts: [
+				{
+					id: 'concept-1',
+					text: 'Heart',
+					derivatives: [{ id: 'd1', type: 'PROBING', text: 'What does it pump?' }]
+				}
+			]
+		});
 
-    expect(parsed.title).toBe('Cardiology');
-  });
+		expect(parsed.title).toBe('Cardiology');
+	});
 
-  it('rejects invalid payloads', () => {
-    const result = topicSchema.safeParse({
-      id: 'not-a-uuid',
-      title: '',
-      folderId: 'also-not-a-uuid',
-      createdAt: 'yesterday',
-    });
+	it('rejects invalid topic content payloads', () => {
+		const result = topicContentSchema.safeParse({
+			id: '',
+			title: '',
+			folder: null,
+			concepts: []
+		});
 
-    expect(result.success).toBe(false);
-  });
+		expect(result.success).toBe(false);
+	});
+});
+
+describe('toTopicTransport', () => {
+	it('adapts database rows into the canonical API transport contract', () => {
+		const parsed = toTopicTransport({
+			id: '4a0f9f3b-5f30-4d37-ae8f-13a6d5f1831a',
+			title: 'Cardiology',
+			topic: {
+				id: 'topic-1',
+				title: 'Cardiology',
+				folder: '',
+				concepts: [{ id: 'concept-1', text: 'Heart', derivatives: [] }]
+			},
+			updatedAt: new Date('2026-01-01T00:00:00.000Z')
+		});
+
+		expect(topicTransportSchema.parse(parsed).updatedAt).toBe('2026-01-01T00:00:00.000Z');
+	});
 });

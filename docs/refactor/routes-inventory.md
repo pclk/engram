@@ -26,3 +26,9 @@
 - `/auth/*` (legacy-style deep links) → `app/auth/[...slug]/page.tsx`
 - `/auth/basic/:view` → `app/auth/basic/[view]/page.tsx`
 - `/auth/advanced/:view` → `app/auth/advanced/[view]/page.tsx`
+
+## Current API authority (post-refactor)
+
+- Canonical content endpoint: `/api/content` (`app/api/content/route.ts`) for authenticated CRUD against Neon-backed `engram_topics`.
+- Canonical auth/session endpoints: `/api/auth` and `/api/session` (`app/api/auth/route.ts`, `app/api/session/route.ts`).
+- Transitional endpoint still referenced by older client code: `/api/content/topics` (`app/api/content/topics/route.ts`) for Prisma-based topic load/save by `userId`.

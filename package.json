@@ -12,16 +12,17 @@
     "test:e2e": "playwright test",
     "typecheck": "tsc --noEmit",
     "prisma:generate": "prisma generate",
-    "postinstall": "pnpm run prisma:generate",
+    "postinstall": "npm run prisma:generate",
     "test": "vitest run",
     "test:unit": "vitest run",
     "test:e2e:ui": "playwright test --ui",
+    "ci:lockfile": "node -e \"const fs=require('fs'); if(fs.existsSync('pnpm-lock.yaml')){console.error('Unexpected lockfile: pnpm-lock.yaml. This repository uses npm and package-lock.json only.'); process.exit(1)}\"",
     "ci:lint": "npm run lint",
-    "ci:typecheck": "pnpm run prisma:generate && npm run typecheck",
+    "ci:typecheck": "npm run prisma:generate && npm run typecheck",
     "ci:unit": "npm run test:unit",
     "ci:e2e": "npm run test:e2e",
-    "ci:audit": "pnpm audit",
-    "ci": "npm run ci:lint && npm run ci:typecheck && npm run ci:unit && npm run ci:e2e && npm run ci:audit"
+    "ci:audit": "npm audit",
+    "ci": "npm run ci:lockfile && npm run ci:lint && npm run ci:typecheck && npm run ci:unit && npm run ci:e2e && npm run ci:audit"
   },
   "dependencies": {
     "@neondatabase/neon-js": "^0.1.0-beta.22",
