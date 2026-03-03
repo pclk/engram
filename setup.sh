@@ -33,6 +33,11 @@ if ! command -v npm >/dev/null 2>&1; then
 fi
 
 NODE_MAJOR="$(node -p "process.versions.node.split('.')[0]")"
+if [ -f pnpm-lock.yaml ]; then
+  echo "Error: Found pnpm-lock.yaml. This repository uses npm with package-lock.json."
+  exit 1
+fi
+
 if [ "$NODE_MAJOR" -lt 20 ]; then
   echo "Warning: Node.js $(node -v) detected. Node.js 20+ is recommended."
 fi
