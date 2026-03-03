@@ -15,11 +15,18 @@ Engram is a modal-based study editor and Anki flashcard factory.
 2. Create `.env.local`.
 3. Configure environment variables:
 
-   **Required for authenticated mode + Prisma runtime:**
-   - `NEXT_PUBLIC_NEON_AUTH_URL` **(required)**
-   - `NEXT_PUBLIC_NEON_DATA_API_URL` **(required)**
+   **Required for authenticated mode:**
+   - `NEXT_PUBLIC_NEON_AUTH_URL` **(required)**: browser auth client URL (`src/lib/auth.ts`).
+   - `NEXT_PUBLIC_NEON_DATA_API_URL` **(required)**: browser data API URL (`src/lib/auth.ts`).
+   - `NEON_AUTH_URL` **(required)**: server auth client URL (`src/server/api/neon.ts`).
+   - `NEON_DATA_API_URL` **(required)**: server data API URL (`src/server/api/neon.ts`).
+
+   **Required for Prisma workflows:**
    - `DATABASE_URL` **(required)**: pooled Neon/Postgres URL used by Prisma Client at runtime.
    - `DIRECT_URL` **(required for migrations)**: direct database URL used by Prisma migrate workflows.
+
+   **Optional:**
+   - `GEMINI_API_KEY`: only needed when running live Gemini API calls.
 
    **Guest/offline mode (no auth required):**
    - Leave auth vars unset.
@@ -33,6 +40,16 @@ Engram is a modal-based study editor and Anki flashcard factory.
 
 6. Run the app:
    `npm run dev`
+
+## Current architecture (post-refactor)
+
+- **Authoritative API routes** are implemented under `app/api/*`:
+  - `app/api/auth/route.ts` (`/api/auth`) for auth-backed session cookie lifecycle + auth check.
+  - `app/api/session/route.ts` (`/api/session`) for current authenticated user session info.
+  - `app/api/content/route.ts` (`/api/content`) for authenticated CRUD on `engram_topics` via server Neon client.
+- **Storage/auth path:**
+  - Auth and content API access in active routes use Neon client configuration from `NEON_AUTH_URL` / `NEON_DATA_API_URL` (server) and `NEXT_PUBLIC_NEON_*` (browser).
+  - Prisma (`DATABASE_URL`, `DIRECT_URL`) is still used by the transitional `/api/content/topics` route and schema workflows.
 
 ## Testing
 
@@ -69,5 +86,4 @@ When you start a fresh Codex container, run:
 
 This installs Linux Chromium runtime packages (when `apt-get` is available), runs `npm ci`, creates a `.env.local` template if needed, and installs Playwright Chromium browser dependencies when available.
 
-After running it, you can write code, run `npm run dev`, and run `npm run test:e2e` (Playwright). The only manual step is setting `GEMINI_API_KEY` in `.env.local` when you want real Gemini API calls.
-
+After running it, you can write code, run `npm run dev`, and run `npm run test:e2e` (Playwright). Populate Neon and database variables in `.env.local`, and set `GEMINI_API_KEY` only if you need live Gemini API calls.
