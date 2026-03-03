@@ -3,7 +3,19 @@
 import React, { useState, useEffect, useRef, useLayoutEffect } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { authClient, neon } from './lib/auth';
+import { authClient } from './lib/auth';
+import {
+	changePasswordSchema,
+	updateAvatarSchema,
+	updateProfileSchema
+} from '@/lib/schemas/auth';
+import {
+	deleteTopicResponseSchema,
+	listTopicsResponseSchema,
+	saveTopicRequestSchema,
+	saveTopicResponseSchema,
+	topicSchema
+} from '@/lib/schemas/content';
 
 // --- Configuration & Types ---
 
@@ -43,7 +55,6 @@ interface HistoryState {
 }
 
 const isE2E = process.env.NEXT_PUBLIC_E2E === 'true';
-const neonSchema = process.env.NEXT_PUBLIC_NEON_SCHEMA || 'public';
 const LOCAL_TOPICS_KEY = 'engram.topics.v1';
 const LOCAL_ACTIVE_TOPIC_KEY = 'engram.activeTopicId.v1';
 
@@ -412,7 +423,6 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 	}>(() => ({ state: 'idle' }));
 	const saveTimersRef = useRef<Record<string, number>>({});
 	const lastSavedRef = useRef<Record<string, string>>({});
-	const schemaRetryRef = useRef({ attempts: 0, timer: 0 as number | null });
 
 	const currentConcept = topic.concepts[cursorIdx];
 	const currentDeriv = (derivIdx >= 0 && currentConcept && currentConcept.derivatives.length > derivIdx)
@@ -423,51 +433,12 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 	const persistMessage = persistStatus.message
 		?? (persistStatus.state === 'error' ? 'Unknown persistence error.' : undefined);
 
-	const refreshSchemaCache = async () => {
-		try {
-			const token = await (auth as any).getJWTToken?.();
-			if (!token) return false;
-			const baseUrl = process.env.NEXT_PUBLIC_NEON_DATA_API_URL;
-			if (!baseUrl) return false;
-			const url = `${baseUrl.replace(/\/$/, '')}/rpc/reload_schema_cache`;
-			const response = await fetch(url, {
-				method: 'POST',
-				headers: {
-					Authorization: `Bearer ${token}`,
-					'Content-Type': 'application/json'
-				},
-				body: '{}'
-			});
-			return response.ok;
-		} catch (error) {
-			console.error('Schema cache refresh failed', error);
-			return false;
-		}
-	};
-
-	const scheduleSchemaRetry = async () => {
-		const maxAttempts = 12;
-		if (schemaRetryRef.current.attempts >= maxAttempts) return;
-		schemaRetryRef.current.attempts += 1;
-		const attempt = schemaRetryRef.current.attempts;
-		if (schemaRetryRef.current.timer) window.clearTimeout(schemaRetryRef.current.timer);
-		const refreshed = await refreshSchemaCache();
-		const refreshNote = refreshed ? 'cache refresh requested' : 'cache refresh unavailable';
-		schemaRetryRef.current.timer = window.setTimeout(() => {
-			setIsHydrated(false);
-		}, 5000);
-		setPersistStatus({
-			state: 'error',
-			message: `Schema cache updating… retry ${attempt}/${maxAttempts} (${refreshNote}).`
-		});
-	};
-
 	const formatPersistError = (error: unknown) => {
 		if (!error) return 'Unknown persistence error.';
 		if (typeof error === 'string') return error;
 		const errorObj = error as { code?: string; message?: string; details?: string; hint?: string } | null;
 		if (errorObj?.code === 'PGRST205') {
-			return `Missing table engram_topics in schema cache. Ensure schema "${neonSchema}" is exposed and wait for cache refresh.`;
+			return "Missing required table engram_topics. Run Prisma migrations and regenerate client.";
 		}
 		if (error instanceof Error) {
 			if (error.name === 'AuthRequiredError') return 'Auth token missing. Please sign in again.';
@@ -481,8 +452,7 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 	};
 
 	const queueSaveTopic = (nextTopic: Topic) => {
-		if (useLocalPersistence || !userId || !isHydrated || !neon) return;
-		const neonClient = neon;
+		if (useLocalPersistence || !userId || !isHydrated) return;
 		const normalized = normalizeTopic(nextTopic);
 		const serialized = stableStringify(normalized);
 		if (lastSavedRef.current[normalized.id] === serialized) return;
@@ -490,52 +460,43 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 		if (existingTimer) window.clearTimeout(existingTimer);
 		saveTimersRef.current[normalized.id] = window.setTimeout(async () => {
 			try {
-				setPersistStatus({ state: 'saving', message: 'Saving to Neon…' });
-				const db = neonClient.schema(neonSchema);
-				await db.from('app_users').upsert({ id: userId, email: userEmail }, { onConflict: 'id' });
-				const { error } = await db.from('engram_topics').upsert({
-					id: normalized.id,
-					owner_id: userId,
-					title: normalized.title,
-					topic: normalized
-				}, { onConflict: 'id' });
-				if (error) throw error;
-				const { data: verifyData, error: verifyError } = await db
-					.from('engram_topics')
-					.select('topic')
-					.eq('id', normalized.id)
-					.eq('owner_id', userId)
-					.maybeSingle();
-				if (verifyError) throw verifyError;
-				const storedSerialized = stableStringify(verifyData?.topic ?? null);
+				setPersistStatus({ state: 'saving', message: 'Saving with Prisma…' });
+				const payload = saveTopicRequestSchema.parse({ userId, userEmail, topic: normalized });
+				const response = await fetch('/api/content/topics', {
+					method: 'POST',
+					headers: { 'Content-Type': 'application/json' },
+					body: JSON.stringify(payload)
+				});
+				if (!response.ok) throw new Error(`Save failed (${response.status})`);
+				const data = saveTopicResponseSchema.parse(await response.json());
+				const storedSerialized = stableStringify(data.topic.topic ?? null);
 				if (storedSerialized !== serialized) {
 					setPersistStatus({ state: 'mismatch', message: 'Saved, but verification mismatch (JSON order/shape).' });
-					console.warn('Persistence mismatch', { expected: normalized, actual: verifyData?.topic });
+					console.warn('Persistence mismatch', { expected: normalized, actual: data.topic.topic });
 					return;
 				}
 				lastSavedRef.current[normalized.id] = serialized;
-				setPersistStatus({ state: 'saved', message: 'Saved to Neon', at: Date.now() });
+				setPersistStatus({ state: 'saved', message: 'Saved with Prisma', at: Date.now() });
 			} catch (error) {
 				console.error('Failed to save topic', error);
 				const message = formatPersistError(error);
 				setPersistStatus({ state: 'error', message });
-				const errorObj = error as { code?: string } | null;
-				if (errorObj?.code === 'PGRST205') scheduleSchemaRetry();
 			}
 		}, 400);
 	};
 
 	const deletePersistedTopic = async (topicId: string) => {
-		if (useLocalPersistence || !userId || !isHydrated || !neon) return;
-		const neonClient = neon;
+		if (useLocalPersistence || !userId || !isHydrated) return;
 		const existingTimer = saveTimersRef.current[topicId];
 		if (existingTimer) window.clearTimeout(existingTimer);
 		delete saveTimersRef.current[topicId];
 		delete lastSavedRef.current[topicId];
 		try {
-			const db = neon!.schema(neonSchema);
-			const { error } = await db.from('engram_topics').delete().eq('id', topicId).eq('owner_id', userId);
-			if (error) throw error;
+			const response = await fetch(`/api/content/topics/${topicId}?userId=${encodeURIComponent(userId)}`, {
+				method: 'DELETE'
+			});
+			if (!response.ok) throw new Error(`Delete failed (${response.status})`);
+			deleteTopicResponseSchema.parse(await response.json());
 		} catch (error) {
 			console.error('Failed to delete topic', error);
 		}
@@ -1675,8 +1636,8 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 
 	useEffect(() => {
 		if (useLocalPersistence) return;
-		if (!!process.env.NEXT_PUBLIC_NEON_AUTH_URL || !process.env.NEXT_PUBLIC_NEON_DATA_API_URL) {
-			setPersistStatus({ state: 'error', message: 'Missing Neon env vars.' });
+		if (!process.env.NEXT_PUBLIC_NEON_AUTH_URL) {
+			setPersistStatus({ state: 'error', message: 'Missing auth env vars.' });
 			return;
 		}
 		if (!userId) {
@@ -1719,21 +1680,10 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 			}
 			if (!userId) return;
 			try {
-				const db = neon!.schema(neonSchema);
-				await db.from('app_users').upsert({ id: userId, email: userEmail }, { onConflict: 'id' });
-				const { data, error } = await db
-					.from('engram_topics')
-					.select('id,title,topic,updated_at')
-					.eq('owner_id', userId)
-					.order('updated_at', { ascending: false });
-				if (error) throw error;
-				const normalized = (data ?? []).map((row: any) => {
-					const raw = row?.topic ?? {};
-					const base: Topic = typeof raw === 'object' && raw !== null
-						? raw
-						: { id: row.id, title: row.title ?? 'Untitled Topic', concepts: [] };
-					return normalizeTopic({ ...base, id: row.id, title: row.title ?? base.title ?? 'Untitled Topic' });
-				});
+				const response = await fetch(`/api/content/topics?userId=${encodeURIComponent(userId)}`);
+				if (!response.ok) throw new Error(`Load failed (${response.status})`);
+				const payload = listTopicsResponseSchema.parse(await response.json());
+				const normalized = payload.topics.map(row => normalizeTopic(topicSchema.parse(row.topic)));
 				const nextTopics = normalized.length ? normalized : [createEmptyTopic('Untitled Topic')];
 				const nextActive = nextTopics[0];
 				if (!isActive) return;
@@ -1744,24 +1694,12 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 				resetHistory({ topic: nextActive, cursorIdx: 0, derivIdx: -1 });
 				setIsHydrated(true);
 				setPersistStatus({ state: 'idle', message: 'Ready to save.' });
-				if (normalized.length === 0) {
-					await db.from('engram_topics').upsert({
-						id: nextActive.id,
-						owner_id: userId,
-						title: nextActive.title,
-						topic: nextActive
-					}, { onConflict: 'id' });
-				}
+				if (normalized.length === 0) queueSaveTopic(nextActive);
 			} catch (error) {
 				console.error('Failed to load topics', error);
 				if (!isActive) return;
 				const message = formatPersistError(error);
 				setPersistStatus({ state: 'error', message });
-				const errorObj = error as { code?: string } | null;
-				if (errorObj?.code === 'PGRST205') {
-					scheduleSchemaRetry();
-					return;
-				}
 				setIsHydrated(true);
 			}
 		};
@@ -1789,10 +1727,6 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 		return () => {
 			Object.values(saveTimersRef.current).forEach(timer => window.clearTimeout(timer as number));
 			saveTimersRef.current = {};
-			if (schemaRetryRef.current.timer) {
-				window.clearTimeout(schemaRetryRef.current.timer);
-				schemaRetryRef.current.timer = null;
-			}
 		};
 	}, []);
 
@@ -2591,7 +2525,8 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 																reader.onerror = () => reject(new Error('Avatar upload failed.'));
 																reader.readAsDataURL(file);
 															});
-															await auth.updateUser({ image: dataUrl, fetchOptions: { throw: true } });
+															const parsed = updateAvatarSchema.parse({ image: dataUrl });
+												await auth.updateUser({ ...parsed, fetchOptions: { throw: true } });
 															await refreshSession();
 															setAvatarStatus({ type: 'success', message: 'Avatar updated.' });
 														} catch (error: any) {
@@ -2613,7 +2548,8 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 														onClick={async () => {
 															setAvatarStatus({ type: 'saving' });
 															try {
-																await auth.updateUser({ image: null, fetchOptions: { throw: true } });
+																const parsed = updateAvatarSchema.parse({ image: null });
+												await auth.updateUser({ ...parsed, fetchOptions: { throw: true } });
 																await refreshSession();
 																setAvatarStatus({ type: 'success', message: 'Avatar removed.' });
 															} catch (error: any) {
@@ -2668,7 +2604,8 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 															setProfileStatus({ type: 'error', message: 'No changes to save.' });
 															return;
 														}
-														await auth.updateUser({ ...updates, fetchOptions: { throw: true } });
+														const parsed = updateProfileSchema.parse(updates);
+												await auth.updateUser({ ...parsed, fetchOptions: { throw: true } });
 														await refreshSession();
 														setProfileStatus({ type: 'success', message: 'Profile updated.' });
 													} catch (error: any) {
@@ -2727,18 +2664,11 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 											className="text-[10px] font-bold px-3 py-1.5 rounded border border-[#2a3350] text-[#9bb2ff] hover:bg-[#2a3350]/30 transition"
 											onClick={async () => {
 												setPasswordStatus({ type: 'saving' });
-												if (!passwordForm.newPassword || passwordForm.newPassword.length < 8) {
-													setPasswordStatus({ type: 'error', message: 'New password must be at least 8 characters.' });
-													return;
-												}
-												if (passwordForm.newPassword !== passwordForm.confirmPassword) {
-													setPasswordStatus({ type: 'error', message: 'Passwords do not match.' });
-													return;
-												}
 												try {
+													const parsed = changePasswordSchema.parse(passwordForm);
 													await auth.changePassword({
-														currentPassword: passwordForm.currentPassword,
-														newPassword: passwordForm.newPassword,
+														currentPassword: parsed.currentPassword,
+														newPassword: parsed.newPassword,
 														revokeOtherSessions: true,
 														fetchOptions: { throw: true }
 													});

@@ -1,0 +1,32 @@
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["driverAdapters"]
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+model AppUser {
+  id        String       @id @db.Uuid
+  email     String?      @unique
+  createdAt DateTime     @default(now()) @map("created_at") @db.Timestamptz(6)
+  topics    EngramTopic[]
+
+  @@map("app_users")
+}
+
+model EngramTopic {
+  id        String   @id @db.Uuid
+  ownerId   String   @map("owner_id") @db.Uuid
+  title     String
+  topic     Json
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
+  owner     AppUser  @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+
+  @@index([ownerId], map: "engram_topics_owner_id_idx")
+  @@map("engram_topics")
+}
