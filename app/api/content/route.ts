@@ -5,7 +5,7 @@ import { neonServer, neonServerDiagnostics } from "@/src/server/api/neon";
 
 // Canonical topic CRUD endpoint. Legacy `/api/content/topics/*` Prisma routes are deprecated.
 
-const topicSchema = z.object({
+const contentPayloadSchema = z.object({
   id: z.string().uuid().optional(),
   title: z.string().min(1).max(200),
   topic: z.record(z.string(), z.unknown()),
@@ -72,7 +72,7 @@ export async function POST(request: Request) {
   const neonError = guardNeon();
   if (neonError) return neonError;
 
-  const body = await parseJson(request, topicSchema);
+  const body = await parseJson(request, contentPayloadSchema);
   if (!body.ok) return body.response;
 
   const { data, error } = await neonServer!

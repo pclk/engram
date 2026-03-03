@@ -33,6 +33,11 @@ if ! command -v npm >/dev/null 2>&1; then
 fi
 
 NODE_MAJOR="$(node -p "process.versions.node.split('.')[0]")"
+if [ -f pnpm-lock.yaml ]; then
+  echo "Error: Found pnpm-lock.yaml. This repository uses npm with package-lock.json."
+  exit 1
+fi
+
 if [ "$NODE_MAJOR" -lt 20 ]; then
   echo "Warning: Node.js $(node -v) detected. Node.js 20+ is recommended."
 fi
@@ -55,10 +60,22 @@ npm ci
 
 if [ ! -f .env.local ]; then
   cat > .env.local <<'ENVEOF'
-# Add your Gemini key before running the app in dev mode.
+# Public Neon browser client config (used by src/lib/auth.ts)
+NEXT_PUBLIC_NEON_AUTH_URL=
+NEXT_PUBLIC_NEON_DATA_API_URL=
+
+# Server Neon API config (used by src/server/api/neon.ts)
+NEON_AUTH_URL=
+NEON_DATA_API_URL=
+
+# Prisma database config
+DATABASE_URL=
+DIRECT_URL=
+
+# Optional model key for live Gemini calls
 GEMINI_API_KEY=
 ENVEOF
-  echo "Created .env.local template. Fill in GEMINI_API_KEY before npm run dev."
+  echo "Created .env.local template. Fill in Neon/DB env vars (and GEMINI_API_KEY if needed) before npm run dev."
 fi
 
 if command -v ldd >/dev/null 2>&1; then
