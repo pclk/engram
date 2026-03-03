@@ -6,7 +6,7 @@ import {
 	listTopicsResponseSchema,
 	saveTopicRequestSchema,
 	saveTopicResponseSchema,
-	topicSchema
+	toTopicTransport
 } from '@/lib/schemas/content';
 
 export async function GET(request: NextRequest) {
@@ -31,12 +31,7 @@ export async function GET(request: NextRequest) {
 	});
 
 	const response = listTopicsResponseSchema.parse({
-		topics: rows.map(row => ({
-			id: row.id,
-			title: row.title,
-			topic: topicSchema.parse(row.topic),
-			updatedAt: row.updatedAt.toISOString()
-		}))
+		topics: rows.map(toTopicTransport)
 	});
 
 	return NextResponse.json(response);
@@ -73,12 +68,7 @@ export async function POST(request: NextRequest) {
 	});
 
 	const response = saveTopicResponseSchema.parse({
-		topic: {
-			id: saved.id,
-			title: saved.title,
-			topic: topicSchema.parse(saved.topic),
-			updatedAt: saved.updatedAt.toISOString()
-		}
+		topic: toTopicTransport(saved)
 	});
 
 	return NextResponse.json(response);
