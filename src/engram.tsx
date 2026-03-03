@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useRef, useLayoutEffect } from 'react';
+import React, { useState, useEffect, useRef, useLayoutEffect, useCallback } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { authClient } from './lib/auth';
@@ -433,7 +433,7 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 	const persistMessage = persistStatus.message
 		?? (persistStatus.state === 'error' ? 'Unknown persistence error.' : undefined);
 
-	const formatPersistError = (error: unknown) => {
+	const formatPersistError = useCallback((error: unknown) => {
 		if (!error) return 'Unknown persistence error.';
 		if (typeof error === 'string') return error;
 		const errorObj = error as { code?: string; message?: string; details?: string; hint?: string } | null;
@@ -449,9 +449,9 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 		} catch {
 			return 'Unexpected persistence error.';
 		}
-	};
+	}, []);
 
-	const queueSaveTopic = (nextTopic: Topic) => {
+	const queueSaveTopic = useCallback((nextTopic: Topic) => {
 		if (useLocalPersistence || !userId || !isHydrated) return;
 		const normalized = normalizeTopic(nextTopic);
 		const serialized = stableStringify(normalized);
@@ -483,7 +483,7 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 				setPersistStatus({ state: 'error', message });
 			}
 		}, 400);
-	};
+	}, [formatPersistError, isHydrated, useLocalPersistence, userEmail, userId]);
 
 	const deletePersistedTopic = async (topicId: string) => {
 		if (useLocalPersistence || !userId || !isHydrated) return;
@@ -1576,7 +1576,7 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 
 		window.addEventListener('keydown', handleKeyDown);
 		return () => window.removeEventListener('keydown', handleKeyDown);
-	}, [mode, keyBuffer, visualAnchor, yankBuffer, normalDeletePending, normalChangePending, normalYankPending, hState, isSearching, selectionPending, lastSearchQuery, cursorIdx, derivIdx, searchQuery, isDocumentSwitcherOpen]);
+	});
 
 	useLayoutEffect(() => {
 		if (mode !== 'BLOCK') return;
@@ -1625,7 +1625,7 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 		return () => {
 			isActive = false;
 		};
-	}, [isAccountOpen, guestMode]);
+	}, [auth, isAccountOpen, guestMode]);
 
 	useEffect(() => {
 		setProfileForm({
@@ -1707,7 +1707,7 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 		return () => {
 			isActive = false;
 		};
-	}, [isHydrated, userId, userEmail, useLocalPersistence]);
+	}, [formatPersistError, isHydrated, queueSaveTopic, resetHistory, userId, userEmail, useLocalPersistence]);
 
 	useEffect(() => {
 		normalCursorRef.current = normalCursor;
@@ -1721,7 +1721,7 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 	useEffect(() => {
 		if (!isHydrated) return;
 		queueSaveTopic(hState.topic);
-	}, [hState.topic, isHydrated]);
+	}, [hState.topic, isHydrated, queueSaveTopic]);
 
 	useEffect(() => {
 		return () => {
