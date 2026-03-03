@@ -6,6 +6,23 @@
 @import '../src/engram-markdown.css';
 @import '@neondatabase/neon-js/ui/css';
 
+.char-cursor {
+	background-color: #9ece6a;
+	color: #1a1b26;
+	display: inline-block;
+	min-width: 1ch;
+	animation: char-cursor-blink 1.1s steps(1, end) infinite;
+}
+
+@keyframes char-cursor-blink {
+	0%,
+	49% {
+		filter: brightness(1);
+	}
+	50%,
+	100% {
+		filter: brightness(0.92);
+	}
 :root {
   --app-background: #1a1b26;
   --app-foreground: #c0caf5;
