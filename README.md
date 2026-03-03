@@ -27,6 +27,27 @@ Engram is a modal-based study editor and Anki flashcard factory.
 4. Run the app:
    `npm run dev`
 
+## Testing
+
+### Unit tests (Vitest + React Testing Library)
+
+- Run unit suites: `npm run test:unit`
+- Watch mode: `npx vitest`
+
+### End-to-end tests (Playwright)
+
+- Install Playwright browsers once: `npx playwright install --with-deps chromium`
+- Run E2E suites: `npm run test:e2e`
+
+### CI command matrix
+
+- Lint: `npm run ci:lint`
+- Typecheck: `npm run ci:typecheck`
+- Unit tests: `npm run ci:unit`
+- E2E tests: `npm run ci:e2e`
+- Security audit: `npm run ci:audit` (runs `pnpm audit`)
+- Full CI sequence: `npm run ci`
+
 ## Codex container setup
 
 When you start a fresh Codex container, run:
@@ -35,7 +56,7 @@ When you start a fresh Codex container, run:
 ./setup.sh
 ```
 
-This installs Linux Chromium runtime packages (when `apt-get` is available), runs `npm ci`, creates a `.env.local` template if needed, and verifies Puppeteer Chromium library links.
+This installs Linux Chromium runtime packages (when `apt-get` is available), runs `npm ci`, creates a `.env.local` template if needed, and installs Playwright Chromium browser dependencies when available.
 
-After running it, you can write code, run `npm run dev`, and run `npm run test:e2e`. The only manual step is setting `GEMINI_API_KEY` in `.env.local` when you want real Gemini API calls.
+After running it, you can write code, run `npm run dev`, and run `npm run test:e2e` (Playwright). The only manual step is setting `GEMINI_API_KEY` in `.env.local` when you want real Gemini API calls.
 

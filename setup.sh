@@ -62,8 +62,8 @@ ENVEOF
 fi
 
 if command -v ldd >/dev/null 2>&1; then
-  echo "Verifying Puppeteer Chromium shared-library links..."
-  CHROMIUM_BIN="$(node -e "const puppeteer = require('puppeteer'); console.log(puppeteer.executablePath());")"
+  echo "Verifying Playwright Chromium shared-library links..."
+  CHROMIUM_BIN="$(node -e "const { chromium } = require('playwright'); console.log(chromium.executablePath());")"
   echo "Using Chromium binary: ${CHROMIUM_BIN}"
   ldd "${CHROMIUM_BIN}" >/dev/null
 fi
