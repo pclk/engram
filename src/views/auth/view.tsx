@@ -1,68 +1,71 @@
-'use client';
+"use client";
 
-import { Suspense, lazy } from 'react';
-import { usePathname } from 'next/navigation';
+import { Suspense, lazy } from "react";
 
-import { BasicAuthView } from './basic-view';
+import { BasicAuthView } from "./basic-view";
 
-const AdvancedAuthView = lazy(() => import('./advanced-view').then(module => ({ default: module.AdvancedAuthView })));
+const AdvancedAuthView = lazy(() =>
+  import("./advanced-view").then((module) => ({
+    default: module.AdvancedAuthView,
+  })),
+);
 const FullAuthView = lazy(() =>
-	import('@neondatabase/neon-js/auth/react/ui').then(module => ({
-		default: ({ path }: { path: string }) => <module.AuthView path={path} className="neon-auth-root" />
-	}))
+  import("@neondatabase/neon-js/auth/react/ui").then((module) => ({
+    default: ({ path }: { path: string }) => (
+      <module.AuthView path={path} className="neon-auth-root" />
+    ),
+  })),
 );
 
-export function AuthViewPage() {
-	const pathname = usePathname();
-	const rawPath = pathname.replace(/^\/auth\/?/, '');
-	const normalized = rawPath || 'sign-in';
-	let viewPath = normalized.split('/')[0];
+export const BASIC_AUTH_VIEWS = [
+  "sign-in",
+  "sign-up",
+  "forgot-password",
+  "magic-link",
+] as const;
+export const ADVANCED_AUTH_VIEWS = [
+  "callback",
+  "recover-account",
+  "reset-password",
+  "sign-out",
+  "two-factor",
+] as const;
 
-	if (normalized.includes('email-otp')) viewPath = 'email-otp';
-	else if (normalized.includes('magic-link')) viewPath = 'magic-link';
-	else if (normalized.includes('two-factor')) viewPath = 'two-factor';
-	else if (normalized.includes('recover-account')) viewPath = 'recover-account';
-	else if (normalized.includes('reset-password')) viewPath = 'reset-password';
-	else if (normalized.includes('forgot-password')) viewPath = 'forgot-password';
-	else if (normalized.includes('callback')) viewPath = 'callback';
-	else if (normalized.includes('sign-out')) viewPath = 'sign-out';
-	else if (normalized.includes('sign-up')) viewPath = 'sign-up';
-	else if (normalized.includes('sign-in')) viewPath = 'sign-in';
+export type BasicAuthPath = (typeof BASIC_AUTH_VIEWS)[number];
+export type AdvancedAuthPath = (typeof ADVANCED_AUTH_VIEWS)[number];
 
-	const isBasicView = ['sign-in', 'sign-up', 'forgot-password', 'magic-link'].includes(viewPath);
-	const isAdvancedView = ['callback', 'recover-account', 'reset-password', 'sign-out', 'two-factor'].includes(viewPath);
+export function normalizeAuthPath(path?: string): string {
+  const normalized = (path || "sign-in").replace(/^\/+|\/+$/g, "");
+  if (normalized.includes("email-otp")) return "email-otp";
+  if (normalized.includes("magic-link")) return "magic-link";
+  if (normalized.includes("two-factor")) return "two-factor";
+  if (normalized.includes("recover-account")) return "recover-account";
+  if (normalized.includes("reset-password")) return "reset-password";
+  if (normalized.includes("forgot-password")) return "forgot-password";
+  if (normalized.includes("callback")) return "callback";
+  if (normalized.includes("sign-out")) return "sign-out";
+  if (normalized.includes("sign-up")) return "sign-up";
+  return "sign-in";
+}
 
-	return (
-		<div className="neon-auth-page">
-			<div className="neon-auth-card">
-				<div className="neon-auth-brand">
-					<img className="neon-auth-brand-badge" src="/logo.svg" alt="Engram" />
-					<div>
-						<h1>Engram</h1>
-						<p>Sign in to your knowledge workspace</p>
-					</div>
-				</div>
-				<div className="neon-auth-root">
-					{isBasicView ? (
-						<BasicAuthView path={viewPath as 'forgot-password' | 'magic-link' | 'sign-in' | 'sign-up'} />
-					) : (
-						<Suspense fallback={<div>Loading...</div>}>
-							{isAdvancedView ? (
-								<AdvancedAuthView path={viewPath as 'callback' | 'recover-account' | 'reset-password' | 'sign-out' | 'two-factor'} />
-							) : (
-								<FullAuthView path={viewPath} />
-							)}
-						</Suspense>
-					)}
-				</div>
-				<div className="neon-auth-links">
-					<a href="/auth/sign-in">Sign in</a>
-					<span>•</span>
-					<a href="/auth/sign-up">Create account</a>
-					<span>•</span>
-					<a href="/auth/forgot-password">Forgot password</a>
-				</div>
-			</div>
-		</div>
-	);
+export function AuthViewPage({ path }: { path?: string }) {
+  const viewPath = normalizeAuthPath(path);
+  const isBasicView = (BASIC_AUTH_VIEWS as readonly string[]).includes(
+    viewPath,
+  );
+  const isAdvancedView = (ADVANCED_AUTH_VIEWS as readonly string[]).includes(
+    viewPath,
+  );
+
+  return isBasicView ? (
+    <BasicAuthView path={viewPath as BasicAuthPath} />
+  ) : (
+    <Suspense fallback={<div>Loading...</div>}>
+      {isAdvancedView ? (
+        <AdvancedAuthView path={viewPath as AdvancedAuthPath} />
+      ) : (
+        <FullAuthView path={viewPath} />
+      )}
+    </Suspense>
+  );
 }
