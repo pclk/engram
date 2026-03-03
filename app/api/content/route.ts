@@ -15,7 +15,7 @@ const querySchema = z.object({
   id: z.string().uuid().optional(),
 });
 
-const updateSchema = topicSchema.extend({
+const updateSchema = contentPayloadSchema.extend({
   id: z.string().uuid(),
 });
 
