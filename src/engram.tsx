@@ -2192,10 +2192,13 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 		<div className="flex flex-col h-screen overflow-hidden font-sans">
 			<div className="p-4 flex justify-between items-center z-10 h-16 absolute top-0 left-0 right-0">
 				<div className="flex items-center gap-3">
-					<img
+					<Image
 						src="/logo.svg"
 						alt="Engram"
 						className="w-24 h-6 object-contain"
+						width={96}
+						height={24}
+						priority
 					/>
 					<h1
 						className="text-sm font-bold text-[#c0caf5] drop-shadow-[0_0_12px_rgba(26,27,38,0.9)]"
@@ -2229,7 +2232,7 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 							aria-label="Open account settings"
 						>
 							{!guestMode && user?.image ? (
-								<img src={user.image} alt={userName} className="h-full w-full rounded-full object-cover" />
+								<Image src={user.image} alt={userName} className="h-full w-full rounded-full object-cover" width={32} height={32} unoptimized />
 							) : (
 								<span>{initials}</span>
 							)}
@@ -2464,7 +2467,7 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 					<div className="w-[min(920px,92vw)] max-h-[85vh] overflow-hidden rounded-2xl border border-[#22283a] bg-[#141821] shadow-[0_30px_80px_rgba(6,8,14,0.65)]">
 						<div className="flex items-center justify-between border-b border-[#1f2536] bg-[#171c28] px-5 py-4">
 							<div className="flex items-center gap-3">
-								<img src="/logo.svg" alt="Engram" className="w-20 h-5 object-contain" />
+								<Image src="/logo.svg" alt="Engram" className="w-20 h-5 object-contain" width={80} height={20} />
 								<div>
 									<div className="text-[11px] font-bold tracking-[0.2em] text-[#cbd3f2]">ACCOUNT</div>
 									<div className="text-[10px] text-[#94a0c6]">Manage your profile & security</div>
@@ -2499,7 +2502,7 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 									<div className="flex flex-col items-start gap-3">
 										<div className="h-16 w-16 rounded-full border border-[#283049] bg-[#101521] overflow-hidden">
 											{!guestMode && user?.image ? (
-												<img src={user.image} alt={userName} className="h-full w-full object-cover" />
+												<Image src={user.image} alt={userName} className="h-full w-full object-cover" width={64} height={64} unoptimized />
 											) : (
 												<div className="h-full w-full flex items-center justify-center text-sm font-bold text-[#9bb2ff]">
 													{initials}
