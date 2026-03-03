@@ -5,6 +5,7 @@ import Image from 'next/image';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { authClient } from './lib/auth';
+import { authFetch } from './lib/api-client';
 import {
 	changePasswordSchema,
 	updateAvatarSchema,
@@ -405,6 +406,8 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 	}>(() => ({ state: 'idle' }));
 	const saveTimersRef = useRef<Record<string, number>>({});
 	const lastSavedRef = useRef<Record<string, string>>({});
+	const sessionBootstrapRef = useRef<Promise<boolean> | null>(null);
+	const reloginPromptedRef = useRef(false);
 
 	const currentConcept = topic.concepts[cursorIdx];
 	const currentDeriv = (derivIdx >= 0 && currentConcept && currentConcept.derivatives.length > derivIdx)
@@ -433,6 +436,49 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 		}
 	}, []);
 
+	const bootstrapSessionOnce = useCallback(async () => {
+		if (guestMode) return false;
+		if (!sessionBootstrapRef.current) {
+			sessionBootstrapRef.current = (async () => {
+				try {
+					const { data } = await auth.getSession();
+					setSessionData(data ?? null);
+					return Boolean(data?.session && data?.user);
+				} catch {
+					setSessionData(null);
+					return false;
+				} finally {
+					sessionBootstrapRef.current = null;
+				}
+			})();
+		}
+		return sessionBootstrapRef.current;
+	}, [auth, guestMode]);
+
+	const handleUnauthorized = useCallback(async () => {
+		const recovered = await bootstrapSessionOnce();
+		if (recovered) {
+			reloginPromptedRef.current = false;
+			return true;
+		}
+		if (!reloginPromptedRef.current) {
+			reloginPromptedRef.current = true;
+			setPersistStatus({
+				state: 'error',
+				message: 'Session expired. Please sign in again to continue saving.'
+			});
+			setToastMessage('Session expired. Redirecting to sign-in…');
+			window.setTimeout(() => {
+				window.location.href = '/auth/sign-in';
+			}, 500);
+		}
+		return false;
+	}, [bootstrapSessionOnce]);
+
+	const requestWithAuth = useCallback((path: string, init?: RequestInit) => {
+		return authFetch(path, init, { onUnauthorized: handleUnauthorized });
+	}, [handleUnauthorized]);
+
 	const queueSaveTopic = useCallback((nextTopic: Topic) => {
 		if (useLocalPersistence || !userId || !isHydrated) return;
 		const normalized = normalizeTopic(nextTopic);
@@ -444,7 +490,7 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 			try {
 				setPersistStatus({ state: 'saving', message: 'Saving with Prisma…' });
 				const payload = saveTopicRequestSchema.parse({ userId, userEmail, topic: normalized });
-				const response = await fetch('/api/content/topics', {
+				const response = await requestWithAuth('/api/content/topics', {
 					method: 'POST',
 					headers: { 'Content-Type': 'application/json' },
 					body: JSON.stringify(payload)
@@ -465,7 +511,7 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 				setPersistStatus({ state: 'error', message });
 			}
 		}, 400);
-	}, [formatPersistError, isHydrated, useLocalPersistence, userEmail, userId]);
+	}, [formatPersistError, isHydrated, requestWithAuth, useLocalPersistence, userEmail, userId]);
 
 	const deletePersistedTopic = async (topicId: string) => {
 		if (useLocalPersistence || !userId || !isHydrated) return;
@@ -474,7 +520,7 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 		delete saveTimersRef.current[topicId];
 		delete lastSavedRef.current[topicId];
 		try {
-			const response = await fetch(`/api/content/topics/${topicId}?userId=${encodeURIComponent(userId)}`, {
+			const response = await requestWithAuth(`/api/content/topics/${topicId}?userId=${encodeURIComponent(userId)}`, {
 				method: 'DELETE'
 			});
 			if (!response.ok) throw new Error(`Delete failed (${response.status})`);
@@ -1662,7 +1708,7 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 			}
 			if (!userId) return;
 			try {
-				const response = await fetch(`/api/content/topics?userId=${encodeURIComponent(userId)}`);
+				const response = await requestWithAuth(`/api/content/topics?userId=${encodeURIComponent(userId)}`);
 				if (!response.ok) throw new Error(`Load failed (${response.status})`);
 				const payload = listTopicsResponseSchema.parse(await response.json());
 				const normalized = payload.topics.map(row => normalizeTopic(toTopicContent(row.topic)));
@@ -1689,7 +1735,7 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 		return () => {
 			isActive = false;
 		};
-	}, [formatPersistError, isHydrated, queueSaveTopic, resetHistory, userId, userEmail, useLocalPersistence]);
+	}, [formatPersistError, isHydrated, queueSaveTopic, requestWithAuth, resetHistory, userId, userEmail, useLocalPersistence]);
 
 	useEffect(() => {
 		normalCursorRef.current = normalCursor;
