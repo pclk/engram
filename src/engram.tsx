@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useRef, useLayoutEffect, useCallback } from 'react';
+import Image from 'next/image';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { authClient } from './lib/auth';
