@@ -13,18 +13,25 @@ Engram is a modal-based study editor and Anki flashcard factory.
 1. Install dependencies:
    `npm install`
 2. Create `.env.local`.
-3. Choose a mode:
+3. Configure environment variables:
 
-   **Authenticated mode (requires Neon):**
-   - `VITE_NEON_AUTH_URL` **(required)**
-   - `VITE_NEON_DATA_API_URL` **(required)**
-   - `VITE_NEON_SCHEMA` *(optional, defaults to `public`)*
+   **Required for authenticated mode + Prisma runtime:**
+   - `NEXT_PUBLIC_NEON_AUTH_URL` **(required)**
+   - `NEXT_PUBLIC_NEON_DATA_API_URL` **(required)**
+   - `DATABASE_URL` **(required)**: pooled Neon/Postgres URL used by Prisma Client at runtime.
+   - `DIRECT_URL` **(required for migrations)**: direct database URL used by Prisma migrate workflows.
 
-   **Guest/offline mode (no Neon env vars required):**
-   - Leave Neon vars unset.
+   **Guest/offline mode (no auth required):**
+   - Leave auth vars unset.
    - Run `npm run dev` and open `/guest`.
 
-4. Run the app:
+4. Generate Prisma client (also runs automatically in `postinstall`):
+   `npm run prisma:generate`
+
+5. Run migrations in development when schema changes:
+   `npm run prisma:migrate:dev`
+
+6. Run the app:
    `npm run dev`
 
 ## Testing

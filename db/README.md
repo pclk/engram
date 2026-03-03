@@ -2,6 +2,13 @@
 
 This document explains the example Neon/PostgreSQL schema in schema.sql and the purpose of each field.
 
+## Prisma + Neon environment variables
+
+- `DATABASE_URL`: pooled Neon/Postgres URL used by Prisma Client for runtime queries.
+- `DIRECT_URL`: direct Neon/Postgres URL used by Prisma migrations (`prisma migrate dev`).
+
+Both are required when running authenticated persistence with Prisma.
+
 ## Overview
 The schema stores Engram documents as a JSONB topic tree and links each document to an authenticated user. It includes timestamps, indexes, and an auto-updated updated_at field.
 

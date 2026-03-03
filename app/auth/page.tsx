@@ -1,9 +1,8 @@
-'use client';
+"use client";
 
-import dynamic from 'next/dynamic';
+import { AuthViewPage } from "@/src/views/auth/view";
 
-const AuthShell = dynamic(() => import('@/src/views/auth/shell').then(module => module.AuthShell), { ssr: false });
-
+export const dynamic = "force-dynamic";
 export default function AuthRootPage() {
-  return <AuthShell />;
+  return <AuthViewPage path="sign-in" />;
 }
