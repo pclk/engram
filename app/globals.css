@@ -23,6 +23,7 @@
 	100% {
 		filter: brightness(0.92);
 	}
+}
 :root {
   --app-background: #1a1b26;
   --app-foreground: #c0caf5;
