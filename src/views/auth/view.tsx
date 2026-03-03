@@ -1,5 +1,7 @@
+'use client';
+
 import { Suspense, lazy } from 'react';
-import { useLocation } from 'react-router-dom';
+import { usePathname } from 'next/navigation';
 
 import { BasicAuthView } from './basic-view';
 
@@ -11,8 +13,8 @@ const FullAuthView = lazy(() =>
 );
 
 export function AuthViewPage() {
-	const location = useLocation();
-	const rawPath = location.pathname.replace(/^\/auth\/?/, '');
+	const pathname = usePathname();
+	const rawPath = pathname.replace(/^\/auth\/?/, '');
 	const normalized = rawPath || 'sign-in';
 	let viewPath = normalized.split('/')[0];
 

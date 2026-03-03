@@ -1,3 +1,5 @@
+'use client';
+
 import { RedirectToSignIn, SignedIn, SignedOut } from '@neondatabase/neon-js/auth/react/ui';
 
 import EngramApp from '../engram';

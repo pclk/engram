@@ -1,3 +1,5 @@
+'use client';
+
 import { toast as sonnerToast } from 'sonner';
 
 const AUTH_VERIFY_PATH = '/auth/email-otp/verify-email';
@@ -36,13 +38,13 @@ export const replace = (href: string) => {
 	window.location.replace(target.href);
 };
 
-export const toast = ({ variant = 'default', message }: { variant?: 'default' | 'error' | 'success'; message: string }) => {
-	const msg = typeof message === 'string' ? message : String(message);
+export const toast = ({ variant = 'default', message }: { variant?: string; message?: string }) => {
+	const msg = typeof message === 'string' ? message : String(message ?? '');
 	if (variant === 'error' && msg.toLowerCase().includes('email not verified')) {
 		setTimeout(() => {
 			window.location.href = `${AUTH_VERIFY_PATH}${window.location.search}`;
 		}, 150);
 	}
-	if (variant === 'default') sonnerToast(msg);
-	else sonnerToast[variant](msg);
+	if (variant === 'default' || typeof (sonnerToast as unknown as Record<string, unknown>)[variant] !== 'function') sonnerToast(msg);
+	else (sonnerToast as unknown as Record<string, (value: string) => void>)[variant](msg);
 };
