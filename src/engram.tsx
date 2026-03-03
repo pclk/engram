@@ -42,9 +42,10 @@ const LOCAL_TOPICS_KEY = 'engram.topics.v1';
 const LOCAL_ACTIVE_TOPIC_KEY = 'engram.activeTopicId.v1';
 
 const generateId = () => {
-	if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) return crypto.randomUUID();
+	const webCrypto = typeof globalThis !== 'undefined' ? globalThis.crypto : undefined;
+	if (webCrypto?.randomUUID) return webCrypto.randomUUID();
 	const bytes = new Uint8Array(16);
-	if (typeof crypto !== 'undefined' && 'getRandomValues' in crypto) crypto.getRandomValues(bytes);
+	if (webCrypto?.getRandomValues) webCrypto.getRandomValues(bytes);
 	else for (let i = 0; i < bytes.length; i += 1) bytes[i] = Math.floor(Math.random() * 256);
 	bytes[6] = (bytes[6] & 0x0f) | 0x40;
 	bytes[8] = (bytes[8] & 0x3f) | 0x80;
@@ -482,7 +483,7 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 		}
 		remoteTopicIdsRef.current.delete(prevId);
 		remoteTopicIdsRef.current.add(nextId);
-	}, []);
+	}, [setHState]);
 	const bootstrapSessionOnce = useCallback(async () => {
 		if (guestMode) return false;
 		if (!sessionBootstrapRef.current) {
@@ -577,11 +578,11 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 
 	const verifyServerSession = useCallback(async () => {
 		if (useLocalPersistence) return;
-		const response = await fetch('/api/session', { credentials: 'include' });
+		const response = await requestWithAuth('/api/session');
 		if (!response.ok) throw new Error(`Session verification failed (${response.status}).`);
 		const payload = await response.json();
-		if (!payload?.data?.user?.id) throw new Error('Session verification failed (missing authenticated user).');
-	}, [useLocalPersistence]);
+		if (!payload?.data?.userId) throw new Error('Session verification failed (missing authenticated user).');
+	}, [requestWithAuth, useLocalPersistence]);
 
 	const queueSaveTopic = useCallback((nextTopic: Topic) => {
 		if (useLocalPersistence || !userId || !isHydrated || !isAuthSynced) return;
@@ -599,17 +600,13 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 					topic: normalized
 				});
 				const shouldUpdate = !!payload.id && remoteTopicIdsRef.current.has(payload.id);
-				let response = await fetch('/api/content', {
+				let response = await requestWithAuth('/api/content', {
 					method: shouldUpdate ? 'PUT' : 'POST',
-				setPersistStatus({ state: 'saving', message: 'Saving with Prisma…' });
-				const payload = saveTopicRequestSchema.parse({ userId, userEmail, topic: normalized });
-				const response = await requestWithAuth('/api/content/topics', {
-					method: 'POST',
 					headers: { 'Content-Type': 'application/json' },
 					body: JSON.stringify(payload)
 				});
 				if (!response.ok && shouldUpdate) {
-					response = await fetch('/api/content', {
+					response = await requestWithAuth('/api/content', {
 						method: 'POST',
 						headers: { 'Content-Type': 'application/json' },
 						body: JSON.stringify({ title: payload.title, topic: payload.topic })
@@ -633,9 +630,7 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 				setPersistStatus({ state: 'error', message });
 			}
 		}, 400);
-	}, [formatPersistError, isHydrated, remapTopicId, useLocalPersistence, userId]);
-	}, [formatPersistError, isHydrated, requestWithAuth, useLocalPersistence, userEmail, userId]);
-	}, [formatPersistError, isAuthSynced, isHydrated, useLocalPersistence, userEmail, userId]);
+	}, [formatPersistError, isAuthSynced, isHydrated, remapTopicId, requestWithAuth, useLocalPersistence, userId]);
 
 	const deletePersistedTopic = async (topicId: string) => {
 		if (useLocalPersistence || !userId || !isHydrated || !isAuthSynced) return;
@@ -644,8 +639,7 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 		delete saveTimersRef.current[topicId];
 		delete lastSavedRef.current[topicId];
 		try {
-			const response = await fetch(`/api/content?id=${encodeURIComponent(topicId)}`, {
-			const response = await requestWithAuth(`/api/content/topics/${topicId}?userId=${encodeURIComponent(userId)}`, {
+			const response = await requestWithAuth(`/api/content?id=${encodeURIComponent(topicId)}`, {
 				method: 'DELETE'
 			});
 			if (!response.ok) throw new Error(`Delete failed (${response.status})`);
@@ -1880,10 +1874,8 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 			if (!userId) return;
 			if (!isAuthSynced) return;
 			try {
-				const response = await fetch('/api/content');
-				const response = await requestWithAuth(`/api/content/topics?userId=${encodeURIComponent(userId)}`);
 				await verifyServerSession();
-				const response = await fetch(`/api/content/topics?userId=${encodeURIComponent(userId)}`);
+				const response = await requestWithAuth('/api/content');
 				if (!response.ok) throw new Error(`Load failed (${response.status})`);
 				const payload = listContentResponseSchema.parse(await response.json());
 				const normalized = payload.data.map(row => {
@@ -1914,9 +1906,7 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 		return () => {
 			isActive = false;
 		};
-	}, [formatPersistError, isHydrated, queueSaveTopic, resetHistory, userId, useLocalPersistence]);
-	}, [formatPersistError, isHydrated, queueSaveTopic, requestWithAuth, resetHistory, userId, userEmail, useLocalPersistence]);
-	}, [formatPersistError, isAuthSynced, isHydrated, queueSaveTopic, resetHistory, userId, userEmail, useLocalPersistence, verifyServerSession]);
+	}, [formatPersistError, isAuthSynced, isHydrated, queueSaveTopic, requestWithAuth, resetHistory, userId, useLocalPersistence, verifyServerSession]);
 
 	useEffect(() => {
 		normalCursorRef.current = normalCursor;
