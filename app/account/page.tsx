@@ -1,7 +1,7 @@
-'use client';
+"use client";
 
-import { Account } from '@/src/views/account';
+import { Account } from "@/src/views/account";
 
 export default function AccountRootPage() {
-  return <Account />;
+  return <Account path="settings" />;
 }
