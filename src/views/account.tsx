@@ -1,9 +1,11 @@
+'use client';
+
 import { AccountView } from '@neondatabase/neon-js/auth/react/ui';
-import { useLocation } from 'react-router-dom';
+import { usePathname } from 'next/navigation';
 
 export function Account() {
-	const location = useLocation();
-	const rawPath = location.pathname.replace(/^\/account\/?/, '');
+	const pathname = usePathname();
+	const rawPath = pathname.replace(/^\/account\/?/, '');
 	const viewPath = rawPath ? rawPath.split('/')[0] : 'settings';
 	return (
 		<div className="neon-auth-page">

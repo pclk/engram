@@ -1,3 +1,5 @@
+'use client';
+
 import React, { useState, useEffect, useRef, useLayoutEffect } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -40,8 +42,8 @@ interface HistoryState {
 	derivIdx: number;
 }
 
-const isE2E = import.meta.env.VITE_E2E === 'true';
-const neonSchema = import.meta.env.VITE_NEON_SCHEMA || 'public';
+const isE2E = process.env.NEXT_PUBLIC_E2E === 'true';
+const neonSchema = process.env.NEXT_PUBLIC_NEON_SCHEMA || 'public';
 const LOCAL_TOPICS_KEY = 'engram.topics.v1';
 const LOCAL_ACTIVE_TOPIC_KEY = 'engram.activeTopicId.v1';
 
@@ -323,6 +325,7 @@ const LegendItem = ({ keys, description }: { keys: string; description: string }
 
 const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 	const useLocalPersistence = isE2E || guestMode;
+	const auth = authClient as NonNullable<typeof authClient>;
 	const [topics, setTopics] = useState<Topic[]>([INITIAL_TOPIC]);
 	const [activeTopicId, setActiveTopicId] = useState(INITIAL_TOPIC.id);
 	const [isHydrated, setIsHydrated] = useState(false);
@@ -422,9 +425,9 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 
 	const refreshSchemaCache = async () => {
 		try {
-			const token = await (authClient as any).getJWTToken?.();
+			const token = await (auth as any).getJWTToken?.();
 			if (!token) return false;
-			const baseUrl = import.meta.env.VITE_NEON_DATA_API_URL as string | undefined;
+			const baseUrl = process.env.NEXT_PUBLIC_NEON_DATA_API_URL;
 			if (!baseUrl) return false;
 			const url = `${baseUrl.replace(/\/$/, '')}/rpc/reload_schema_cache`;
 			const response = await fetch(url, {
@@ -478,7 +481,8 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 	};
 
 	const queueSaveTopic = (nextTopic: Topic) => {
-		if (useLocalPersistence || !userId || !isHydrated) return;
+		if (useLocalPersistence || !userId || !isHydrated || !neon) return;
+		const neonClient = neon;
 		const normalized = normalizeTopic(nextTopic);
 		const serialized = stableStringify(normalized);
 		if (lastSavedRef.current[normalized.id] === serialized) return;
@@ -487,7 +491,7 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 		saveTimersRef.current[normalized.id] = window.setTimeout(async () => {
 			try {
 				setPersistStatus({ state: 'saving', message: 'Saving to Neon…' });
-				const db = neon.schema(neonSchema);
+				const db = neonClient.schema(neonSchema);
 				await db.from('app_users').upsert({ id: userId, email: userEmail }, { onConflict: 'id' });
 				const { error } = await db.from('engram_topics').upsert({
 					id: normalized.id,
@@ -522,13 +526,14 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 	};
 
 	const deletePersistedTopic = async (topicId: string) => {
-		if (useLocalPersistence || !userId || !isHydrated) return;
+		if (useLocalPersistence || !userId || !isHydrated || !neon) return;
+		const neonClient = neon;
 		const existingTimer = saveTimersRef.current[topicId];
 		if (existingTimer) window.clearTimeout(existingTimer);
 		delete saveTimersRef.current[topicId];
 		delete lastSavedRef.current[topicId];
 		try {
-			const db = neon.schema(neonSchema);
+			const db = neon!.schema(neonSchema);
 			const { error } = await db.from('engram_topics').delete().eq('id', topicId).eq('owner_id', userId);
 			if (error) throw error;
 		} catch (error) {
@@ -1644,7 +1649,7 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 
 	const refreshSession = async () => {
 		if (guestMode) return;
-		const { data } = await authClient.getSession();
+		const { data } = await auth.getSession();
 		setSessionData(data ?? null);
 	};
 
@@ -1652,7 +1657,7 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 		let isActive = true;
 		const fetchSession = async () => {
 			if (guestMode) return;
-			const { data } = await authClient.getSession();
+			const { data } = await auth.getSession();
 			if (isActive) setSessionData(data ?? null);
 		};
 		fetchSession();
@@ -1670,7 +1675,7 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 
 	useEffect(() => {
 		if (useLocalPersistence) return;
-		if (!import.meta.env.VITE_NEON_AUTH_URL || !import.meta.env.VITE_NEON_DATA_API_URL) {
+		if (!!process.env.NEXT_PUBLIC_NEON_AUTH_URL || !process.env.NEXT_PUBLIC_NEON_DATA_API_URL) {
 			setPersistStatus({ state: 'error', message: 'Missing Neon env vars.' });
 			return;
 		}
@@ -1714,7 +1719,7 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 			}
 			if (!userId) return;
 			try {
-				const db = neon.schema(neonSchema);
+				const db = neon!.schema(neonSchema);
 				await db.from('app_users').upsert({ id: userId, email: userEmail }, { onConflict: 'id' });
 				const { data, error } = await db
 					.from('engram_topics')
@@ -2475,7 +2480,7 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 													 ${cursorIdx === cIdx && derivIdx === 0 ? 'ring-1 ring-[#565f89] bg-[#565f89]/10 text-[#c0caf5]' : ''}`}
 										>
 											<span>No derivatives.</span>
-											{cursorIdx === cIdx && derivIdx === 0 && <span className="text-[#ff9e64] font-bold">Press 'o' to add.</span>}
+											{cursorIdx === cIdx && derivIdx === 0 && <span className="text-[#ff9e64] font-bold">Press &apos;o&apos; to add.</span>}
 										</div>
 									)}
 								</div>
@@ -2542,7 +2547,7 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 									className="text-[10px] font-bold px-2 py-1 rounded border border-[#f27a93]/40 text-[#ff9aaa] hover:bg-[#f27a93]/15 transition"
 									onClick={async () => {
 										try {
-											await authClient.signOut({ fetchOptions: { throw: true } });
+											await auth.signOut({ fetchOptions: { throw: true } });
 										} finally {
 											setIsAccountOpen(false);
 											window.location.href = '/auth/sign-in';
@@ -2586,7 +2591,7 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 																reader.onerror = () => reject(new Error('Avatar upload failed.'));
 																reader.readAsDataURL(file);
 															});
-															await authClient.updateUser({ image: dataUrl, fetchOptions: { throw: true } });
+															await auth.updateUser({ image: dataUrl, fetchOptions: { throw: true } });
 															await refreshSession();
 															setAvatarStatus({ type: 'success', message: 'Avatar updated.' });
 														} catch (error: any) {
@@ -2608,7 +2613,7 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 														onClick={async () => {
 															setAvatarStatus({ type: 'saving' });
 															try {
-																await authClient.updateUser({ image: null, fetchOptions: { throw: true } });
+																await auth.updateUser({ image: null, fetchOptions: { throw: true } });
 																await refreshSession();
 																setAvatarStatus({ type: 'success', message: 'Avatar removed.' });
 															} catch (error: any) {
@@ -2663,7 +2668,7 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 															setProfileStatus({ type: 'error', message: 'No changes to save.' });
 															return;
 														}
-														await authClient.updateUser({ ...updates, fetchOptions: { throw: true } });
+														await auth.updateUser({ ...updates, fetchOptions: { throw: true } });
 														await refreshSession();
 														setProfileStatus({ type: 'success', message: 'Profile updated.' });
 													} catch (error: any) {
@@ -2731,7 +2736,7 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 													return;
 												}
 												try {
-													await authClient.changePassword({
+													await auth.changePassword({
 														currentPassword: passwordForm.currentPassword,
 														newPassword: passwordForm.newPassword,
 														revokeOtherSessions: true,

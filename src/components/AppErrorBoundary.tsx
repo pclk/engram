@@ -1,3 +1,5 @@
+'use client';
+
 import { Component, type ErrorInfo, type ReactNode } from 'react';
 
 type AppErrorBoundaryProps = {
@@ -18,7 +20,7 @@ export class AppErrorBoundary extends Component<AppErrorBoundaryProps, AppErrorB
 	}
 
 	componentDidCatch(error: Error, errorInfo: ErrorInfo) {
-		if (import.meta.env.DEV) {
+		if (process.env.NODE_ENV !== 'production') {
 			console.error('Application crashed in AppErrorBoundary.', error, errorInfo);
 		}
 	}
