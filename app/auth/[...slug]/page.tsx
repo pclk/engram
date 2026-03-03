@@ -1,9 +1,18 @@
-'use client';
+"use client";
 
-import dynamic from 'next/dynamic';
+import { AuthViewPage } from "@/src/views/auth/view";
 
-const AuthShell = dynamic(() => import('@/src/views/auth/shell').then(module => module.AuthShell), { ssr: false });
+export const dynamic = "force-dynamic";
+type AuthCatchAllPageProps = {
+  params: {
+    slug?: string[];
+  };
+};
 
-export default function AuthPage() {
-  return <AuthShell />;
+export default function AuthPage({ params }: AuthCatchAllPageProps) {
+  const slug = params.slug || [];
+  const path =
+    slug[0] === "basic" || slug[0] === "advanced" ? slug[1] : slug[0];
+
+  return <AuthViewPage path={path} />;
 }
