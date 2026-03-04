@@ -1,4 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { createHmac } from 'node:crypto';
 
 const requireAuthMock = vi.fn();
 const fromMock = vi.fn();
@@ -131,12 +132,19 @@ describe("/api/content route", () => {
     const body = await response.json();
 
 const encode = (input: object) => Buffer.from(JSON.stringify(input)).toString('base64url');
-const makeToken = (sub: string) => `${encode({ alg: 'none', typ: 'JWT' })}.${encode({ sub })}.sig`;
+const makeToken = (sub: string, secret: string) => {
+	const header = encode({ alg: 'HS256', typ: 'JWT' });
+	const payload = encode({ sub, exp: Math.floor(Date.now() / 1000) + 60 });
+	const signature = createHmac('sha256', secret).update(`${header}.${payload}`).digest('base64url');
+	return `${header}.${payload}.${signature}`;
+};
 
 describe('/api/content auth behavior', () => {
 	beforeEach(() => {
+		vi.resetModules();
 		cookiesMock.mockReset();
 		fromMock.mockReset();
+		process.env.ENGRAM_SESSION_JWT_SECRET = 'session-secret';
 	});
 
 	it('returns 401 without session cookie', async () => {
