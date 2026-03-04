@@ -1,47 +1,46 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-
-const decodeProtectedHeaderMock = vi.fn();
-const compactVerifyMock = vi.fn();
-const createRemoteJWKSetMock = vi.fn(() => vi.fn());
-
-vi.mock('jose', () => ({
-  decodeProtectedHeader: decodeProtectedHeaderMock,
-  compactVerify: compactVerifyMock,
-  createRemoteJWKSet: createRemoteJWKSetMock
-}));
+import { createHmac } from 'node:crypto';
 
 vi.mock('next/headers', () => ({
   cookies: vi.fn()
 }));
 
-describe('requireAuth token verification', () => {
-  const issuer = 'https://auth.example.test';
-  const audience = 'engram-app';
-  const nowInSeconds = () => Math.floor(Date.now() / 1000);
+const encode = (input: object) => Buffer.from(JSON.stringify(input)).toString('base64url');
 
+const signJwt = ({
+  secret,
+  sub,
+  email,
+  exp
+}: {
+  secret: string;
+  sub: string;
+  email?: string;
+  exp: number;
+}) => {
+  const header = encode({ alg: 'HS256', typ: 'JWT' });
+  const payload = encode({ sub, ...(email ? { email } : {}), exp });
+  const signature = createHmac('sha256', secret).update(`${header}.${payload}`).digest('base64url');
+  return `${header}.${payload}.${signature}`;
+};
+
+describe('requireAuth token verification', () => {
   beforeEach(() => {
     vi.resetModules();
-    vi.clearAllMocks();
-    process.env.NEON_AUTH_JWT_ISSUER = issuer;
-    process.env.NEON_AUTH_JWT_AUDIENCE = audience;
-    process.env.NEON_AUTH_JWKS_URL = `${issuer}/.well-known/jwks.json`;
+    process.env.ENGRAM_SESSION_JWT_SECRET = 'session-secret';
   });
 
-  const configureVerificationPayload = (payload: Record<string, unknown>) => {
-    decodeProtectedHeaderMock.mockReturnValue({ alg: 'RS256' });
-    compactVerifyMock.mockResolvedValue({
-      payload: Buffer.from(JSON.stringify(payload), 'utf8')
-    });
-  };
-
   it('rejects forged token', async () => {
-    decodeProtectedHeaderMock.mockReturnValue({ alg: 'RS256' });
-    compactVerifyMock.mockRejectedValue(new Error('signature verification failed'));
+    const token = signJwt({
+      secret: 'wrong-secret',
+      sub: '11111111-1111-4111-8111-111111111111',
+      exp: Math.floor(Date.now() / 1000) + 300
+    });
 
     const { requireAuth } = await import('@/src/server/api/auth');
     const result = await requireAuth(
       new Request('http://localhost/api/content', {
-        headers: { authorization: 'Bearer forged.token.value' }
+        headers: { authorization: `Bearer ${token}` }
       })
     );
 
@@ -52,18 +51,17 @@ describe('requireAuth token verification', () => {
     }
   });
 
-  it('rejects expired token after verification', async () => {
-    configureVerificationPayload({
-      sub: 'user-1',
-      iss: issuer,
-      aud: audience,
-      exp: nowInSeconds() - 5
+  it('rejects expired token', async () => {
+    const token = signJwt({
+      secret: 'session-secret',
+      sub: '11111111-1111-4111-8111-111111111111',
+      exp: Math.floor(Date.now() / 1000) - 5
     });
 
     const { requireAuth } = await import('@/src/server/api/auth');
     const result = await requireAuth(
       new Request('http://localhost/api/content', {
-        headers: { authorization: 'Bearer signed-but-expired.token' }
+        headers: { authorization: `Bearer ${token}` }
       })
     );
 
@@ -75,24 +73,27 @@ describe('requireAuth token verification', () => {
   });
 
   it('accepts valid signed token', async () => {
-    configureVerificationPayload({
-      sub: 'user-1',
-      iss: issuer,
-      aud: audience,
-      exp: nowInSeconds() + 300
+    const token = signJwt({
+      secret: 'session-secret',
+      sub: '11111111-1111-4111-8111-111111111111',
+      email: 'user@example.com',
+      exp: Math.floor(Date.now() / 1000) + 300
     });
 
-    const token = 'Bearer good.signed.token';
     const { requireAuth } = await import('@/src/server/api/auth');
     const result = await requireAuth(
       new Request('http://localhost/api/content', {
-        headers: { authorization: token }
+        headers: { authorization: `Bearer ${token}` }
       })
     );
 
     expect(result).toEqual({
       ok: true,
-      auth: { token: 'good.signed.token', userId: 'user-1', email: undefined }
+      auth: {
+        token,
+        userId: '11111111-1111-4111-8111-111111111111',
+        email: 'user@example.com'
+      }
     });
   });
 });
