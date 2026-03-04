@@ -16,7 +16,7 @@ const jwtHeaderSchema = z.object({
 });
 
 const jwtPayloadSchema = z.object({
-  sub: z.string().min(1),
+  sub: z.string().uuid(),
   email: z.string().email().optional(),
   exp: z.number().optional(),
   iat: z.number().optional()

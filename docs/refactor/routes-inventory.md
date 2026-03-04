@@ -31,4 +31,4 @@
 
 - Canonical content endpoint: `/api/content` (`app/api/content/route.ts`) for authenticated CRUD against Neon-backed `engram_topics`.
 - Canonical auth/session endpoints: `/api/auth` and `/api/session` (`app/api/auth/route.ts`, `app/api/session/route.ts`).
-- Transitional endpoint still referenced by older client code: `/api/content/topics` (`app/api/content/topics/route.ts`) for Prisma-based topic load/save by `userId`.
+- Deprecated compatibility endpoints: `/api/content/topics` and `/api/content/topics/:topicId` now return `410 Deprecated` migration guidance that points clients to `/api/content` and authenticated owner scoping.
