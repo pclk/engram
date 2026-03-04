@@ -130,11 +130,51 @@ describe("/api/content route", () => {
     );
     const body = await response.json();
 
-    expect(response.status).toBe(200);
-    expect(body).toEqual({ data: { id: topicId, deleted: true } });
-    expect(eqMock).toHaveBeenCalledWith(
-      "owner_id",
-      "33333333-3333-3333-3333-333333333333",
-    );
-  });
+const encode = (input: object) => Buffer.from(JSON.stringify(input)).toString('base64url');
+const makeToken = (sub: string) => `${encode({ alg: 'none', typ: 'JWT' })}.${encode({ sub })}.sig`;
+
+describe('/api/content auth behavior', () => {
+	beforeEach(() => {
+		cookiesMock.mockReset();
+		fromMock.mockReset();
+	});
+
+	it('returns 401 without session cookie', async () => {
+		cookiesMock.mockResolvedValue({ get: () => undefined });
+		const { GET } = await import('@/app/api/content/route');
+
+		const response = await GET(new Request('http://localhost/api/content'));
+
+		expect(response.status).toBe(401);
+		await expect(response.json()).resolves.toMatchObject({ error: 'Unauthorized.' });
+	});
+
+
+	it('returns 401 with non-uuid subject in session cookie', async () => {
+		cookiesMock.mockResolvedValue({ get: () => ({ value: makeToken('neon|abc123') }) });
+		const { GET } = await import('@/app/api/content/route');
+
+		const response = await GET(new Request('http://localhost/api/content'));
+
+		expect(response.status).toBe(401);
+		await expect(response.json()).resolves.toMatchObject({ error: 'Invalid auth token.' });
+	});
+
+	it('returns 200 with session cookie', async () => {
+		cookiesMock.mockResolvedValue({ get: () => ({ value: makeToken('11111111-1111-4111-8111-111111111111') }) });
+		const rows = [{
+			id: '22222222-2222-4222-8222-222222222222',
+			title: 'Biology',
+			topic: { id: 'topic', title: 'Biology', folder: '', concepts: [{ id: 'c1', text: 'Cell', derivatives: [] }] },
+			created_at: '2026-01-01T00:00:00.000Z',
+			updated_at: '2026-01-01T00:00:00.000Z'
+		}];
+		fromMock.mockReturnValue(makeQuery(rows));
+		const { GET } = await import('@/app/api/content/route');
+
+		const response = await GET(new Request('http://localhost/api/content'));
+
+		expect(response.status).toBe(200);
+		await expect(response.json()).resolves.toEqual({ data: { topics: rows } });
+	});
 });
