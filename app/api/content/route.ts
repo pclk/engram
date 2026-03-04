@@ -108,10 +108,14 @@ export async function PUT(request: Request) {
     .eq("id", body.data.id)
     .eq("owner_id", authResult.auth.userId)
     .select("id, title, topic, created_at, updated_at")
-    .single();
+    .maybeSingle();
 
   if (error) {
     return errorResponse(500, "Failed to update content.", error.message);
+  }
+
+  if (!data) {
+    return errorResponse(404, "Content not found.");
   }
 
   return Response.json({ data: { topic: data } });
@@ -132,14 +136,20 @@ export async function DELETE(request: Request) {
     return errorResponse(400, "Validation failed.", parsed.error.flatten());
   }
 
-  const { error } = await neonServer!
+  const { data, error } = await neonServer!
     .from("engram_topics")
     .delete()
     .eq("id", parsed.data.id)
-    .eq("owner_id", authResult.auth.userId);
+    .eq("owner_id", authResult.auth.userId)
+    .select("id")
+    .maybeSingle();
 
   if (error) {
     return errorResponse(500, "Failed to delete content.", error.message);
+  }
+
+  if (!data) {
+    return errorResponse(404, "Content not found.");
   }
 
   return Response.json({ data: { id: parsed.data.id, deleted: true } });
