@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { createHmac } from 'node:crypto';
 
 const cookiesMock = vi.fn();
 
@@ -27,12 +28,19 @@ vi.mock('@/src/server/api/neon', () => ({
 }));
 
 const encode = (input: object) => Buffer.from(JSON.stringify(input)).toString('base64url');
-const makeToken = (sub: string) => `${encode({ alg: 'none', typ: 'JWT' })}.${encode({ sub })}.sig`;
+const makeToken = (sub: string, secret: string) => {
+	const header = encode({ alg: 'HS256', typ: 'JWT' });
+	const payload = encode({ sub, exp: Math.floor(Date.now() / 1000) + 60 });
+	const signature = createHmac('sha256', secret).update(`${header}.${payload}`).digest('base64url');
+	return `${header}.${payload}.${signature}`;
+};
 
 describe('/api/content auth behavior', () => {
 	beforeEach(() => {
+		vi.resetModules();
 		cookiesMock.mockReset();
 		fromMock.mockReset();
+		process.env.ENGRAM_SESSION_JWT_SECRET = 'session-secret';
 	});
 
 	it('returns 401 without session cookie', async () => {
@@ -46,7 +54,9 @@ describe('/api/content auth behavior', () => {
 	});
 
 	it('returns 200 with session cookie', async () => {
-		cookiesMock.mockResolvedValue({ get: () => ({ value: makeToken('11111111-1111-4111-8111-111111111111') }) });
+		cookiesMock.mockResolvedValue({
+			get: () => ({ value: makeToken('11111111-1111-4111-8111-111111111111', 'session-secret') })
+		});
 		const rows = [{
 			id: '22222222-2222-4222-8222-222222222222',
 			title: 'Biology',
@@ -60,6 +70,6 @@ describe('/api/content auth behavior', () => {
 		const response = await GET(new Request('http://localhost/api/content'));
 
 		expect(response.status).toBe(200);
-		await expect(response.json()).resolves.toEqual({ data: rows });
+		await expect(response.json()).resolves.toEqual({ data: { topics: rows } });
 	});
 });

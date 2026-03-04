@@ -1,11 +1,17 @@
 import { cookies } from 'next/headers';
 import { z } from 'zod';
-import { SESSION_COOKIE_NAME, requireAuth } from '@/src/server/api/auth';
+import { SESSION_COOKIE_NAME, requireAuth, verifySessionToken } from '@/src/server/api/auth';
 import { errorResponse, parseJson } from '@/src/server/api/http';
 
+const jwtStructureSchema = z
+  .string()
+  .regex(/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/, 'Token must be a JWT (header.payload.signature).');
+
 const upsertSessionSchema = z.object({
-  accessToken: z.string().min(20)
+  accessToken: jwtStructureSchema
 });
+
+const bearerSchema = z.string().regex(/^Bearer\s+.+$/i, 'Invalid authorization format.');
 
 export async function GET(request: Request) {
   const authResult = await requireAuth(request);
@@ -23,6 +29,22 @@ export async function GET(request: Request) {
 export async function POST(request: Request) {
   const body = await parseJson(request, upsertSessionSchema);
   if (!body.ok) return body.response;
+
+  const authorizationHeader = request.headers.get('authorization');
+  const parsedAuthorization = bearerSchema.safeParse(authorizationHeader);
+  if (!parsedAuthorization.success) {
+    return errorResponse(401, 'Authorization header is required to establish a session.');
+  }
+
+  const bearerToken = parsedAuthorization.data.replace(/^Bearer\s+/i, '').trim();
+  if (bearerToken !== body.data.accessToken) {
+    return errorResponse(401, 'Access token mismatch.');
+  }
+
+  const verification = verifySessionToken(body.data.accessToken);
+  if (!verification.ok) {
+    return errorResponse(401, 'Invalid auth token.');
+  }
 
   const cookieStore = await cookies();
   cookieStore.set(SESSION_COOKIE_NAME, body.data.accessToken, {
