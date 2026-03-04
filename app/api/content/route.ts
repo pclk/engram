@@ -2,13 +2,14 @@ import { z } from "zod";
 import { errorResponse, parseJson } from "@/src/server/api/http";
 import { requireAuth } from "@/src/server/api/auth";
 import { neonServer, neonServerDiagnostics } from "@/src/server/api/neon";
+import { topicContentSchema } from "@/lib/schemas/topic";
 
 // Canonical topic CRUD endpoint. Legacy `/api/content/topics/*` Prisma routes are deprecated.
 
 const contentPayloadSchema = z.object({
   id: z.string().uuid().optional(),
   title: z.string().min(1).max(200),
-  topic: z.record(z.string(), z.unknown()),
+  topic: topicContentSchema,
 });
 
 const querySchema = z.object({

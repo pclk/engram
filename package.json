@@ -13,6 +13,7 @@
     "test:e2e": "playwright test",
     "typecheck": "tsc --noEmit",
     "prisma:generate": "prisma generate",
+    "prisma:migrate:dev": "prisma migrate dev",
     "postinstall": "npm run prisma:generate",
     "test": "vitest run",
     "test:unit": "vitest run",

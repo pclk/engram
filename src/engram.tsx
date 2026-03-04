@@ -548,13 +548,16 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 		const attemptSync = async () => {
 			const maxAttempts = 3;
 			for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-				try {
-					const response = await fetch('/api/auth', {
-						method: 'POST',
-						headers: { 'Content-Type': 'application/json' },
-						credentials: 'include',
-						body: JSON.stringify({ accessToken })
-					});
+					try {
+						const response = await fetch('/api/auth', {
+							method: 'POST',
+							headers: {
+								'Content-Type': 'application/json',
+								Authorization: `Bearer ${accessToken}`
+							},
+							credentials: 'include',
+							body: JSON.stringify({ accessToken })
+						});
 					if (!response.ok) throw new Error(`Auth bootstrap failed (${response.status}).`);
 					setAuthSyncError(null);
 					setIsAuthSynced(true);

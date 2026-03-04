@@ -41,8 +41,11 @@ export async function POST(request: Request) {
     return errorResponse(401, 'Access token mismatch.');
   }
 
-  const verification = verifySessionToken(body.data.accessToken);
+  const verification = await verifySessionToken(body.data.accessToken);
   if (!verification.ok) {
+    if (verification.reason === 'expired') {
+      return errorResponse(401, 'Session expired.');
+    }
     return errorResponse(401, 'Invalid auth token.');
   }
 
