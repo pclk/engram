@@ -45,7 +45,7 @@ describe('/api/content auth behavior', () => {
 		await expect(response.json()).resolves.toMatchObject({ error: 'Unauthorized.' });
 	});
 
-	it('returns 200 with session cookie', async () => {
+	it('returns 401 with unsigned session cookie', async () => {
 		cookiesMock.mockResolvedValue({ get: () => ({ value: makeToken('11111111-1111-4111-8111-111111111111') }) });
 		const rows = [{
 			id: '22222222-2222-4222-8222-222222222222',
@@ -59,7 +59,7 @@ describe('/api/content auth behavior', () => {
 
 		const response = await GET(new Request('http://localhost/api/content'));
 
-		expect(response.status).toBe(200);
-		await expect(response.json()).resolves.toEqual({ data: rows });
+		expect(response.status).toBe(401);
+		await expect(response.json()).resolves.toMatchObject({ error: 'Invalid auth token.' });
 	});
 });
