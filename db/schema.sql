@@ -5,7 +5,8 @@
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
 -- Engram topics: each topic stores a topic tree in JSONB
--- owner_id should be validated against Neon Auth user IDs at the application or RLS layer
+-- owner_id stores Neon Auth subject (`sub`) and is canonically typed as UUID
+-- application auth parsing must reject non-UUID subjects before DB access
 CREATE TABLE IF NOT EXISTS engram_topics (
 	id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
 	owner_id UUID NOT NULL,

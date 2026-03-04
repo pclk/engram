@@ -45,6 +45,17 @@ describe('/api/content auth behavior', () => {
 		await expect(response.json()).resolves.toMatchObject({ error: 'Unauthorized.' });
 	});
 
+
+	it('returns 401 with non-uuid subject in session cookie', async () => {
+		cookiesMock.mockResolvedValue({ get: () => ({ value: makeToken('neon|abc123') }) });
+		const { GET } = await import('@/app/api/content/route');
+
+		const response = await GET(new Request('http://localhost/api/content'));
+
+		expect(response.status).toBe(401);
+		await expect(response.json()).resolves.toMatchObject({ error: 'Invalid auth token.' });
+	});
+
 	it('returns 200 with session cookie', async () => {
 		cookiesMock.mockResolvedValue({ get: () => ({ value: makeToken('11111111-1111-4111-8111-111111111111') }) });
 		const rows = [{
@@ -60,6 +71,6 @@ describe('/api/content auth behavior', () => {
 		const response = await GET(new Request('http://localhost/api/content'));
 
 		expect(response.status).toBe(200);
-		await expect(response.json()).resolves.toEqual({ data: rows });
+		await expect(response.json()).resolves.toEqual({ data: { topics: rows } });
 	});
 });

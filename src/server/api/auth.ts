@@ -5,7 +5,7 @@ import { errorResponse } from './http';
 export const SESSION_COOKIE_NAME = 'engram_session';
 
 const jwtPayloadSchema = z.object({
-  sub: z.string().min(1),
+  sub: z.string().uuid(),
   email: z.string().email().optional(),
   exp: z.number().optional(),
   iat: z.number().optional()
