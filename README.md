@@ -43,7 +43,7 @@ Engram is a vim-inspired study notetaking editor.
   - `app/api/content/route.ts` (`/api/content`) for authenticated CRUD on `engram_topics` via server Neon client.
 - **Storage/auth path:**
   - Auth and content API access in active routes use Neon client configuration from `NEON_AUTH_URL` / `NEON_DATA_API_URL` (server) and `NEXT_PUBLIC_NEON_*` (browser).
-  - Prisma (`DATABASE_URL`, `DIRECT_URL`) is still used by the transitional `/api/content/topics` route and schema workflows.
+  - Prisma (`DATABASE_URL`, `DIRECT_URL`) is used for schema/migration workflows; runtime content API traffic should use `/api/content`.
 
 ## Testing
 
@@ -51,6 +51,14 @@ Engram is a vim-inspired study notetaking editor.
 
 - Run unit suites: `npm run test:unit`
 - Watch mode: `npx vitest`
+
+### Testing style guide (route-to-test mapping)
+
+- `app/api/**/route.ts` → `tests/unit/app/api/**/*-route.test.ts`
+- `src/lib/**` helpers → `tests/unit/lib/**/*.test.ts`
+- `src/components/**` React components → `tests/unit/components/**/*.test.tsx`
+
+Keep unit test folders aligned with runtime code location so API ownership and refactors are easy to track.
 
 ### End-to-end tests (Playwright)
 
