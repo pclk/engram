@@ -94,6 +94,22 @@ describe("/api/content route", () => {
     );
 
     expect(response.status).toBe(201);
+    await expect(response.json()).resolves.toEqual({
+      data: {
+        topic: {
+          id: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+          title: "Topic",
+          topic: {
+            id: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+            title: "Topic",
+            folder: "",
+            concepts: [{ id: "1", text: "", derivatives: [] }],
+          },
+          created_at: "2026-01-01T00:00:00.000Z",
+          updated_at: "2026-01-01T00:00:00.000Z",
+        },
+      },
+    });
     expect(insertMock).toHaveBeenCalledWith(
       expect.objectContaining({
         owner_id: "22222222-2222-2222-2222-222222222222",

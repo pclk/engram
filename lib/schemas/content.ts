@@ -27,11 +27,15 @@ export const contentRowSchema = z.object({
 });
 
 export const listContentResponseSchema = z.object({
-	data: z.array(contentRowSchema)
+	data: z.object({
+		topics: z.array(contentRowSchema)
+	})
 });
 
 export const upsertContentResponseSchema = z.object({
-	data: contentRowSchema
+	data: z.object({
+		topic: contentRowSchema
+	})
 });
 
 export const deleteContentResponseSchema = z.object({
