@@ -12,8 +12,8 @@ Engram is a vim-inspired study notetaking editor.
 3. Configure environment variables:
 
    **Required for authenticated mode:**
-   - `NEXT_PUBLIC_NEON_AUTH_URL` **(required)**: browser auth client URL (`src/lib/auth.ts`).
-   - `NEXT_PUBLIC_NEON_DATA_API_URL` **(required)**: browser data API URL (`src/lib/auth.ts`).
+   - `NEXT_PUBLIC_NEON_AUTH_URL` **(required)**: browser auth client URL (`lib/auth.ts`).
+   - `NEXT_PUBLIC_NEON_DATA_API_URL` **(required)**: browser data API URL (`lib/auth.ts`).
    - `NEON_AUTH_URL` **(required)**: server auth client URL (`src/server/api/neon.ts`).
    - `NEON_DATA_API_URL` **(required)**: server data API URL (`src/server/api/neon.ts`).
 
@@ -57,7 +57,7 @@ Engram is a vim-inspired study notetaking editor.
 ### Testing style guide (route-to-test mapping)
 
 - `app/api/**/route.ts` → `tests/unit/app/api/**/*-route.test.ts`
-- `src/lib/**` helpers → `tests/unit/lib/**/*.test.ts`
+- `lib/**` helpers → `tests/unit/lib/**/*.test.ts`
 - `src/components/**` React components → `tests/unit/components/**/*.test.tsx`
 
 Keep unit test folders aligned with runtime code location so API ownership and refactors are easy to track.

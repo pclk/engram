@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { normalizeWhitespace, truncateText } from '@/src/lib/utils/text';
+import { normalizeWhitespace, truncateText } from '@/lib/utils/text';
 
 describe('text utils', () => {
   it('normalizes whitespace', () => {

@@ -1,7 +1,7 @@
 import { cookies } from 'next/headers';
 import { redirect } from 'next/navigation';
 import { Home } from '@/src/views/home';
-import { neonConfigDiagnostics } from '@/src/lib/auth';
+import { neonConfigDiagnostics } from '@/lib/auth';
 import { SESSION_COOKIE_NAME } from '@/src/server/api/auth';
 
 function MissingConfigPanel() {

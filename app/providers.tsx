@@ -1,8 +1,8 @@
 'use client';
 
 import { NeonAuthUIProvider } from '@neondatabase/neon-js/auth/react/ui';
-import { authClient } from '@/src/lib/auth-client';
-import { navigate, replace, toast } from '@/src/lib/auth-ui';
+import { authClient } from '@/lib/auth-client';
+import { navigate, replace, toast } from '@/lib/auth-ui';
 
 export function Providers({ children }: { children: React.ReactNode }) {
   if (!authClient) {
