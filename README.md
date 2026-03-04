@@ -6,6 +6,8 @@ Engram is a vim-inspired study notetaking editor.
 
 1. Install dependencies (canonical package manager: **npm**):
    `npm install`
+
+   A `preinstall` guard enforces npm usage and fails installs started from other package managers.
 2. Create `.env.local`.
 3. Configure environment variables:
 
@@ -60,6 +62,7 @@ Engram is a vim-inspired study notetaking editor.
 ### CI command matrix
 
 > Lockfile policy: this repository uses **npm** and the canonical lockfile is `package-lock.json`. Do not commit `pnpm-lock.yaml`.
+> Enforcement: `npm run ci:lockfile` blocks `pnpm-lock.yaml`, and `preinstall` ensures installs are run with npm.
 
 
 - Lint: `npm run ci:lint`
