@@ -1,7 +1,8 @@
-'use client';
-
+import { cookies } from 'next/headers';
+import { redirect } from 'next/navigation';
 import { Home } from '@/src/views/home';
 import { neonConfigDiagnostics } from '@/src/lib/auth';
+import { SESSION_COOKIE_NAME } from '@/src/server/api/auth';
 
 function MissingConfigPanel() {
   return (
@@ -24,9 +25,15 @@ function MissingConfigPanel() {
   );
 }
 
-export default function Page() {
+export default async function Page() {
   if (!neonConfigDiagnostics.isConfigured) {
     return <MissingConfigPanel />;
+  }
+
+  const cookieStore = await cookies();
+  const hasSessionCookie = Boolean(cookieStore.get(SESSION_COOKIE_NAME)?.value);
+  if (!hasSessionCookie) {
+    redirect('/auth/sign-in');
   }
 
   return <Home />;
