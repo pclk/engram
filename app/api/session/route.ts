@@ -6,10 +6,9 @@ export async function GET(request: Request) {
 
   return Response.json({
     data: {
-      user: {
-        id: authResult.auth.userId,
-        email: authResult.auth.email ?? null
-      }
+      userId: authResult.auth.userId,
+      email: authResult.auth.email ?? null,
+      authenticated: true
     }
   });
 }

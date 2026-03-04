@@ -32,6 +32,7 @@ export type AuthContext = {
 const bearerSchema = z.string().regex(/^Bearer\s+.+$/i, 'Invalid authorization format.');
 const ASYMMETRIC_ALGORITHMS = ['RS256', 'RS384', 'RS512', 'ES256', 'ES384', 'ES512', 'EdDSA'] as const;
 const asymmetricAlgorithmSet = new Set<string>(ASYMMETRIC_ALGORITHMS);
+const jwksResolverCache = new Map<string, ReturnType<typeof createRemoteJWKSet>>();
 
 const decodeBase64UrlSegment = (segment: string): string => {
   const normalized = segment.replace(/-/g, '+').replace(/_/g, '/');
@@ -108,12 +109,20 @@ const resolveJwksConfig = () => {
   return { jwksUrl, issuer, audience };
 };
 
+const getJwksResolver = (jwksUrl: string) => {
+  const cached = jwksResolverCache.get(jwksUrl);
+  if (cached) return cached;
+  const resolver = createRemoteJWKSet(new URL(jwksUrl));
+  jwksResolverCache.set(jwksUrl, resolver);
+  return resolver;
+};
+
 const verifyAsymmetricToken = async (token: string, alg: (typeof ASYMMETRIC_ALGORITHMS)[number]): Promise<VerifySessionTokenResult> => {
   const config = resolveJwksConfig();
   if (!config) return { ok: false, reason: 'invalid' };
 
   try {
-    const keyset = createRemoteJWKSet(new URL(config.jwksUrl));
+    const keyset = getJwksResolver(config.jwksUrl);
     const verified = await compactVerify(token, keyset, { algorithms: [alg] });
     const payload = JSON.parse(new TextDecoder().decode(verified.payload)) as Record<string, unknown>;
 

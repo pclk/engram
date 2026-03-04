@@ -145,7 +145,7 @@ export async function DELETE(request: Request) {
     .from("engram_topics")
     .delete()
     .eq("id", parsed.data.id)
-    .eq("owner_id", authResult.auth.userId)
+    .eq("owner_id", ownerIdFromAuth(authResult.auth.userId))
     .select("id")
     .maybeSingle();
 
