@@ -6,12 +6,14 @@ Engram is a vim-inspired study notetaking editor.
 
 1. Install dependencies (canonical package manager: **npm**):
    `npm install`
+
+   A `preinstall` guard enforces npm usage and fails installs started from other package managers.
 2. Create `.env.local`.
 3. Configure environment variables:
 
    **Required for authenticated mode:**
-   - `NEXT_PUBLIC_NEON_AUTH_URL` **(required)**: browser auth client URL (`src/lib/auth.ts`).
-   - `NEXT_PUBLIC_NEON_DATA_API_URL` **(required)**: browser data API URL (`src/lib/auth.ts`).
+   - `NEXT_PUBLIC_NEON_AUTH_URL` **(required)**: browser auth client URL (`lib/auth.ts`).
+   - `NEXT_PUBLIC_NEON_DATA_API_URL` **(required)**: browser data API URL (`lib/auth.ts`).
    - `NEON_AUTH_URL` **(required)**: server auth client URL (`src/server/api/neon.ts`).
    - `NEON_DATA_API_URL` **(required)**: server data API URL (`src/server/api/neon.ts`).
 
@@ -43,7 +45,7 @@ Engram is a vim-inspired study notetaking editor.
   - `app/api/content/route.ts` (`/api/content`) for authenticated CRUD on `engram_topics` via server Neon client.
 - **Storage/auth path:**
   - Auth and content API access in active routes use Neon client configuration from `NEON_AUTH_URL` / `NEON_DATA_API_URL` (server) and `NEXT_PUBLIC_NEON_*` (browser).
-  - Prisma (`DATABASE_URL`, `DIRECT_URL`) is still used by the transitional `/api/content/topics` route and schema workflows.
+  - Prisma (`DATABASE_URL`, `DIRECT_URL`) is used for schema/migration workflows; runtime content API traffic should use `/api/content`.
 
 ## Testing
 
@@ -51,6 +53,14 @@ Engram is a vim-inspired study notetaking editor.
 
 - Run unit suites: `npm run test:unit`
 - Watch mode: `npx vitest`
+
+### Testing style guide (route-to-test mapping)
+
+- `app/api/**/route.ts` → `tests/unit/app/api/**/*-route.test.ts`
+- `lib/**` helpers → `tests/unit/lib/**/*.test.ts`
+- `src/components/**` React components → `tests/unit/components/**/*.test.tsx`
+
+Keep unit test folders aligned with runtime code location so API ownership and refactors are easy to track.
 
 ### End-to-end tests (Playwright)
 
@@ -60,6 +70,7 @@ Engram is a vim-inspired study notetaking editor.
 ### CI command matrix
 
 > Lockfile policy: this repository uses **npm** and the canonical lockfile is `package-lock.json`. Do not commit `pnpm-lock.yaml`.
+> Enforcement: `npm run ci:lockfile` blocks `pnpm-lock.yaml`, and `preinstall` ensures installs are run with npm.
 
 
 - Lint: `npm run ci:lint`

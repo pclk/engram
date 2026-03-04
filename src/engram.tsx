@@ -4,8 +4,8 @@ import React, { useState, useEffect, useRef, useLayoutEffect, useCallback } from
 import Image from 'next/image';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { authClient } from './lib/auth';
-import { authFetch } from './lib/api-client';
+import { authClient } from '@/lib/auth';
+import { authFetch } from '@/lib/api-client';
 import {
 	changePasswordSchema,
 	updateAvatarSchema,
@@ -548,13 +548,16 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 		const attemptSync = async () => {
 			const maxAttempts = 3;
 			for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-				try {
-					const response = await fetch('/api/auth', {
-						method: 'POST',
-						headers: { 'Content-Type': 'application/json' },
-						credentials: 'include',
-						body: JSON.stringify({ accessToken })
-					});
+					try {
+						const response = await fetch('/api/auth', {
+							method: 'POST',
+							headers: {
+								'Content-Type': 'application/json',
+								Authorization: `Bearer ${accessToken}`
+							},
+							credentials: 'include',
+							body: JSON.stringify({ accessToken })
+						});
 					if (!response.ok) throw new Error(`Auth bootstrap failed (${response.status}).`);
 					setAuthSyncError(null);
 					setIsAuthSynced(true);
@@ -615,15 +618,15 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 				}
 				if (!response.ok) throw new Error(`Save failed (${response.status})`);
 				const data = upsertContentResponseSchema.parse(await response.json());
-				if (data.data.id !== normalized.id) remapTopicId(normalized.id, data.data.id);
-				const storedSerialized = stableStringify(data.data.topic ?? null);
+				if (data.data.topic.id !== normalized.id) remapTopicId(normalized.id, data.data.topic.id);
+				const storedSerialized = stableStringify(data.data.topic.topic ?? null);
 				if (storedSerialized !== serialized) {
 					setPersistStatus({ state: 'mismatch', message: 'Saved, but verification mismatch (JSON order/shape).' });
-					console.warn('Persistence mismatch', { expected: normalized, actual: data.data.topic });
+					console.warn('Persistence mismatch', { expected: normalized, actual: data.data.topic.topic });
 					return;
 				}
-				lastSavedRef.current[data.data.id] = serialized;
-				remoteTopicIdsRef.current.add(data.data.id);
+				lastSavedRef.current[data.data.topic.id] = serialized;
+				remoteTopicIdsRef.current.add(data.data.topic.id);
 				setPersistStatus({ state: 'saved', message: 'Saved', at: Date.now() });
 			} catch (error) {
 				console.error('Failed to save topic', error);
@@ -1896,7 +1899,7 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 				const response = await requestWithAuth('/api/content');
 				if (!response.ok) throw new Error(`Load failed (${response.status})`);
 				const payload = listContentResponseSchema.parse(await response.json());
-				const normalized = payload.data.map(row => {
+				const normalized = payload.data.topics.map(row => {
 					remoteTopicIdsRef.current.add(row.id);
 					const content = toTopicContent(row.topic);
 					return normalizeTopic({ ...content, id: row.id, title: row.title });

@@ -2,13 +2,14 @@ import { z } from "zod";
 import { errorResponse, parseJson } from "@/src/server/api/http";
 import { requireAuth } from "@/src/server/api/auth";
 import { neonServer, neonServerDiagnostics } from "@/src/server/api/neon";
+import { topicContentSchema } from "@/lib/schemas/topic";
 
 // Canonical topic CRUD endpoint. Legacy `/api/content/topics/*` Prisma routes are deprecated.
 
 const contentPayloadSchema = z.object({
   id: z.string().uuid().optional(),
   title: z.string().min(1).max(200),
-  topic: z.record(z.string(), z.unknown()),
+  topic: topicContentSchema,
 });
 
 const querySchema = z.object({
@@ -18,6 +19,10 @@ const querySchema = z.object({
 const updateSchema = contentPayloadSchema.extend({
   id: z.string().uuid(),
 });
+
+const ownerIdSchema = z.string().uuid();
+
+const ownerIdFromAuth = (userId: string) => ownerIdSchema.parse(userId);
 
 const withAuth = async (request: Request) => {
   const authResult = await requireAuth(request);
@@ -52,7 +57,7 @@ export async function GET(request: Request) {
   const query = neonServer!
     .from("engram_topics")
     .select("id, title, topic, created_at, updated_at")
-    .eq("owner_id", authResult.auth.userId)
+    .eq("owner_id", ownerIdFromAuth(authResult.auth.userId))
     .order("updated_at", { ascending: false });
 
   const scopedQuery = parsed.data.id ? query.eq("id", parsed.data.id) : query;
@@ -78,7 +83,7 @@ export async function POST(request: Request) {
   const { data, error } = await neonServer!
     .from("engram_topics")
     .insert({
-      owner_id: authResult.auth.userId,
+      owner_id: ownerIdFromAuth(authResult.auth.userId),
       title: body.data.title,
       topic: body.data.topic,
     })
@@ -106,12 +111,16 @@ export async function PUT(request: Request) {
     .from("engram_topics")
     .update({ title: body.data.title, topic: body.data.topic })
     .eq("id", body.data.id)
-    .eq("owner_id", authResult.auth.userId)
+    .eq("owner_id", ownerIdFromAuth(authResult.auth.userId))
     .select("id, title, topic, created_at, updated_at")
-    .single();
+    .maybeSingle();
 
   if (error) {
     return errorResponse(500, "Failed to update content.", error.message);
+  }
+
+  if (!data) {
+    return errorResponse(404, "Content not found.");
   }
 
   return Response.json({ data: { topic: data } });
@@ -132,14 +141,20 @@ export async function DELETE(request: Request) {
     return errorResponse(400, "Validation failed.", parsed.error.flatten());
   }
 
-  const { error } = await neonServer!
+  const { data, error } = await neonServer!
     .from("engram_topics")
     .delete()
     .eq("id", parsed.data.id)
-    .eq("owner_id", authResult.auth.userId);
+    .eq("owner_id", ownerIdFromAuth(authResult.auth.userId))
+    .select("id")
+    .maybeSingle();
 
   if (error) {
     return errorResponse(500, "Failed to delete content.", error.message);
+  }
+
+  if (!data) {
+    return errorResponse(404, "Content not found.");
   }
 
   return Response.json({ data: { id: parsed.data.id, deleted: true } });
