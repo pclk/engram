@@ -177,8 +177,9 @@ const tokenFromRequest = async (request: Request): Promise<string | null> => {
   const headerValue = request.headers.get('authorization');
   if (headerValue) {
     const parsedHeader = bearerSchema.safeParse(headerValue);
-    if (!parsedHeader.success) return null;
-    return parsedHeader.data.replace(/^Bearer\s+/i, '').trim();
+    if (parsedHeader.success) {
+      return parsedHeader.data.replace(/^Bearer\s+/i, '').trim();
+    }
   }
 
   const cookieStore = await cookies();
