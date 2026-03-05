@@ -10,7 +10,7 @@ datasource db {
 }
 
 model EngramTopic {
-  id        String   @id @db.Uuid
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   // Neon Auth JWT `sub` (canonical UUID owner identifier)
   ownerId   String   @map("owner_id") @db.Uuid
   title     String
