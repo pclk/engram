@@ -1,6 +1,6 @@
 import { errorResponse } from "@/src/server/api/http";
 
-// Deprecated: topic CRUD has moved to the canonical `/api/content` Neon-backed endpoint.
+// Deprecated: topic CRUD has moved to the canonical `/api/content` endpoint.
 export async function DELETE() {
   return errorResponse(410, "Deprecated endpoint.", {
     deprecatedEndpoint: "/api/content/topics/:topicId",

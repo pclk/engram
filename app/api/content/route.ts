@@ -1,161 +1,118 @@
-import { z } from "zod";
-import { errorResponse, parseJson } from "@/src/server/api/http";
-import { requireAuth } from "@/src/server/api/auth";
-import { neonServer, neonServerDiagnostics } from "@/src/server/api/neon";
-import { topicContentSchema } from "@/lib/schemas/topic";
-
-// Canonical topic CRUD endpoint. Legacy `/api/content/topics/*` Prisma routes are deprecated.
+import { z } from 'zod';
+import { getDb } from '@/lib/db';
+import { topicContentSchema } from '@/lib/schemas/topic';
+import { requireAuth } from '@/src/server/api/auth';
+import { errorResponse, parseJson } from '@/src/server/api/http';
 
 const contentPayloadSchema = z.object({
   id: z.string().uuid().optional(),
   title: z.string().min(1).max(200),
-  topic: topicContentSchema,
+  topic: topicContentSchema
 });
 
 const querySchema = z.object({
-  id: z.string().uuid().optional(),
+  id: z.string().uuid().optional()
 });
 
 const updateSchema = contentPayloadSchema.extend({
-  id: z.string().uuid(),
+  id: z.string().uuid()
 });
 
-const ownerIdSchema = z.string().uuid();
-
-const ownerIdFromAuth = (userId: string) => ownerIdSchema.parse(userId);
-
-const withAuth = async (request: Request) => {
-  const authResult = await requireAuth(request);
-  if (!authResult.ok) return authResult;
-  return authResult;
-};
-
-const guardNeon = () => {
-  if (!neonServer) {
-    return errorResponse(
-      503,
-      "Content backend is not configured.",
-      neonServerDiagnostics,
-    );
-  }
-  return null;
-};
+const toContentRow = (row: {
+  id: string;
+  title: string;
+  topic: unknown;
+  createdAt: Date;
+  updatedAt: Date;
+}) => ({
+  id: row.id,
+  title: row.title,
+  topic: topicContentSchema.parse(row.topic),
+  created_at: row.createdAt.toISOString(),
+  updated_at: row.updatedAt.toISOString()
+});
 
 export async function GET(request: Request) {
-  const authResult = await withAuth(request);
+  const authResult = await requireAuth(request);
   if (!authResult.ok) return authResult.response;
 
-  const neonError = guardNeon();
-  if (neonError) return neonError;
-
   const params = new URL(request.url).searchParams;
-  const parsed = querySchema.safeParse({ id: params.get("id") ?? undefined });
+  const parsed = querySchema.safeParse({ id: params.get('id') ?? undefined });
   if (!parsed.success) {
-    return errorResponse(400, "Validation failed.", parsed.error.flatten());
+    return errorResponse(400, 'Validation failed.', parsed.error.flatten());
   }
 
-  const query = neonServer!
-    .from("engram_topics")
-    .select("id, title, topic, created_at, updated_at")
-    .eq("owner_id", ownerIdFromAuth(authResult.auth.userId))
-    .order("updated_at", { ascending: false });
+  const topics = await getDb().engramTopic.findMany({
+    where: {
+      ownerId: authResult.auth.userId,
+      ...(parsed.data.id ? { id: parsed.data.id } : {})
+    },
+    orderBy: { updatedAt: 'desc' }
+  });
 
-  const scopedQuery = parsed.data.id ? query.eq("id", parsed.data.id) : query;
-  const { data, error } = await scopedQuery;
-
-  if (error) {
-    return errorResponse(500, "Failed to fetch content.", error.message);
-  }
-
-  return Response.json({ data: { topics: data ?? [] } });
+  return Response.json({
+    data: {
+      topics: topics.map(toContentRow)
+    }
+  });
 }
 
 export async function POST(request: Request) {
-  const authResult = await withAuth(request);
+  const authResult = await requireAuth(request);
   if (!authResult.ok) return authResult.response;
-
-  const neonError = guardNeon();
-  if (neonError) return neonError;
 
   const body = await parseJson(request, contentPayloadSchema);
   if (!body.ok) return body.response;
 
-  const { data, error } = await neonServer!
-    .from("engram_topics")
-    .insert({
-      owner_id: ownerIdFromAuth(authResult.auth.userId),
+  const topic = await getDb().engramTopic.create({
+    data: {
+      ownerId: authResult.auth.userId,
       title: body.data.title,
-      topic: body.data.topic,
-    })
-    .select("id, title, topic, created_at, updated_at")
-    .single();
+      topic: body.data.topic
+    }
+  });
 
-  if (error) {
-    return errorResponse(500, "Failed to create content.", error.message);
-  }
-
-  return Response.json({ data: { topic: data } }, { status: 201 });
+  return Response.json({ data: { topic: toContentRow(topic) } }, { status: 201 });
 }
 
 export async function PUT(request: Request) {
-  const authResult = await withAuth(request);
+  const authResult = await requireAuth(request);
   if (!authResult.ok) return authResult.response;
-
-  const neonError = guardNeon();
-  if (neonError) return neonError;
 
   const body = await parseJson(request, updateSchema);
   if (!body.ok) return body.response;
 
-  const { data, error } = await neonServer!
-    .from("engram_topics")
-    .update({ title: body.data.title, topic: body.data.topic })
-    .eq("id", body.data.id)
-    .eq("owner_id", ownerIdFromAuth(authResult.auth.userId))
-    .select("id, title, topic, created_at, updated_at")
-    .maybeSingle();
+  const existing = await getDb().engramTopic.findFirst({
+    where: { id: body.data.id, ownerId: authResult.auth.userId }
+  });
+  if (!existing) return errorResponse(404, 'Content not found.');
 
-  if (error) {
-    return errorResponse(500, "Failed to update content.", error.message);
-  }
+  const topic = await getDb().engramTopic.update({
+    where: { id: body.data.id },
+    data: {
+      title: body.data.title,
+      topic: body.data.topic
+    }
+  });
 
-  if (!data) {
-    return errorResponse(404, "Content not found.");
-  }
-
-  return Response.json({ data: { topic: data } });
+  return Response.json({ data: { topic: toContentRow(topic) } });
 }
 
 export async function DELETE(request: Request) {
-  const authResult = await withAuth(request);
+  const authResult = await requireAuth(request);
   if (!authResult.ok) return authResult.response;
 
-  const neonError = guardNeon();
-  if (neonError) return neonError;
-
   const params = new URL(request.url).searchParams;
-  const parsed = querySchema
-    .extend({ id: z.string().uuid() })
-    .safeParse({ id: params.get("id") ?? undefined });
+  const parsed = querySchema.extend({ id: z.string().uuid() }).safeParse({ id: params.get('id') ?? undefined });
   if (!parsed.success) {
-    return errorResponse(400, "Validation failed.", parsed.error.flatten());
+    return errorResponse(400, 'Validation failed.', parsed.error.flatten());
   }
 
-  const { data, error } = await neonServer!
-    .from("engram_topics")
-    .delete()
-    .eq("id", parsed.data.id)
-    .eq("owner_id", ownerIdFromAuth(authResult.auth.userId))
-    .select("id")
-    .maybeSingle();
+  const existing = await getDb().engramTopic.findFirst({
+    where: { id: parsed.data.id, ownerId: authResult.auth.userId }
+  });
+  if (!existing) return errorResponse(404, 'Content not found.');
 
-  if (error) {
-    return errorResponse(500, "Failed to delete content.", error.message);
-  }
-
-  if (!data) {
-    return errorResponse(404, "Content not found.");
-  }
-
+  await getDb().engramTopic.delete({ where: { id: parsed.data.id } });
   return Response.json({ data: { id: parsed.data.id, deleted: true } });
 }

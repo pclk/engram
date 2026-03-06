@@ -11,7 +11,7 @@ datasource db {
 
 model EngramTopic {
   id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  // Neon Auth JWT `sub` (canonical UUID owner identifier)
+  // Local application user UUID
   ownerId   String   @map("owner_id") @db.Uuid
   title     String
   topic     Json
@@ -20,4 +20,30 @@ model EngramTopic {
 
   @@index([ownerId], map: "engram_topics_owner_id_idx")
   @@map("engram_topics")
+}
+
+model User {
+  id           String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  email        String    @unique
+  name         String
+  image        String?
+  passwordHash String    @map("password_hash")
+  createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt    DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+  sessions     Session[]
+
+  @@map("app_users")
+}
+
+model Session {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tokenHash String   @unique @map("token_hash")
+  userId    String   @map("user_id") @db.Uuid
+  expiresAt DateTime @map("expires_at") @db.Timestamptz(6)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId], map: "app_sessions_user_id_idx")
+  @@map("app_sessions")
 }

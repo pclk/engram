@@ -430,15 +430,7 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 	const userId = (user?.id || null) as string | null;
 	const persistMessage = persistStatus.message
 		?? (persistStatus.state === 'error' ? 'Unknown persistence error.' : undefined);
-	const authSyncInFlightRef = useRef<Promise<void> | null>(null);
-	const getAccessTokenFromSession = useCallback((sessionPayload: any): string | null => {
-		if (!sessionPayload) return null;
-		const token = sessionPayload?.tokens?.accessToken
-			?? sessionPayload?.session?.token
-			?? sessionPayload?.session?.accessToken
-			?? null;
-		return typeof token === 'string' && token.length > 0 ? token : null;
-	}, []);
+	const hasActiveSession = useCallback((sessionPayload: any) => Boolean(sessionPayload?.session && sessionPayload?.user), []);
 
 	const formatPersistError = useCallback((error: unknown) => {
 		if (!error) return 'Unknown persistence error.';
@@ -518,7 +510,7 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 			});
 			setToastMessage('Session expired. Redirecting to sign-in…');
 			window.setTimeout(() => {
-				window.location.href = '/auth/sign-in';
+				window.location.href = '/login';
 			}, 500);
 		}
 		return false;
@@ -534,51 +526,14 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 			return;
 		}
 		const session = sessionPayload ?? sessionData;
-		const accessToken = getAccessTokenFromSession(session);
-		if (!accessToken) {
+		if (!hasActiveSession(session)) {
 			setIsAuthSynced(false);
-			setAuthSyncError('Auth token missing. Please sign in again.');
-			throw new Error('Auth token missing.');
+			setAuthSyncError('Not signed in.');
+			throw new Error('No active session.');
 		}
-		if (authSyncInFlightRef.current) {
-			await authSyncInFlightRef.current;
-			return;
-		}
-
-		const attemptSync = async () => {
-			const maxAttempts = 3;
-			for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-					try {
-						const response = await fetch('/api/auth', {
-							method: 'POST',
-							headers: {
-								'Content-Type': 'application/json',
-								Authorization: `Bearer ${accessToken}`
-							},
-							credentials: 'include',
-							body: JSON.stringify({ accessToken })
-						});
-					if (!response.ok) throw new Error(`Auth bootstrap failed (${response.status}).`);
-					setAuthSyncError(null);
-					setIsAuthSynced(true);
-					return;
-				} catch (error) {
-					if (attempt === maxAttempts) {
-						setIsAuthSynced(false);
-						setAuthSyncError(formatPersistError(error));
-						throw error;
-					}
-					const backoffMs = 300 * 2 ** (attempt - 1);
-					await new Promise(resolve => setTimeout(resolve, backoffMs));
-				}
-			}
-		};
-
-		authSyncInFlightRef.current = attemptSync().finally(() => {
-			authSyncInFlightRef.current = null;
-		});
-		await authSyncInFlightRef.current;
-	}, [formatPersistError, getAccessTokenFromSession, sessionData, useLocalPersistence]);
+		setAuthSyncError(null);
+		setIsAuthSynced(true);
+	}, [hasActiveSession, sessionData, useLocalPersistence]);
 
 	const verifyServerSession = useCallback(async () => {
 		if (useLocalPersistence) return;
@@ -1781,7 +1736,7 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 		if (guestMode) return;
 		const { data } = await auth.getSession();
 		setSessionData(data ?? null);
-		if (getAccessTokenFromSession(data)) {
+		if (data?.session) {
 			try {
 				await syncAuthCookie(data);
 			} catch (error) {
@@ -1797,7 +1752,7 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 			const { data } = await auth.getSession();
 			if (!isActive) return;
 			setSessionData(data ?? null);
-			if (getAccessTokenFromSession(data)) {
+			if (data?.session) {
 				try {
 					await syncAuthCookie(data);
 				} catch (error) {
@@ -1809,7 +1764,7 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 		return () => {
 			isActive = false;
 		};
-	}, [auth, getAccessTokenFromSession, isAccountOpen, guestMode, syncAuthCookie]);
+	}, [auth, isAccountOpen, guestMode, syncAuthCookie]);
 
 	useEffect(() => {
 		if (guestMode) return;
@@ -1817,7 +1772,7 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 		if (typeof maybeSubscribe !== 'function') return;
 		const subscription = maybeSubscribe.call(auth, async (event: string, payload: any) => {
 			setSessionData(payload ?? null);
-			if (!getAccessTokenFromSession(payload)) {
+			if (!payload?.session) {
 				setIsAuthSynced(false);
 				setAuthSyncError(null);
 				return;
@@ -1832,7 +1787,7 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 			const unsubscribe = subscription?.unsubscribe ?? subscription;
 			if (typeof unsubscribe === 'function') unsubscribe();
 		};
-	}, [auth, getAccessTokenFromSession, guestMode, syncAuthCookie]);
+	}, [auth, guestMode, syncAuthCookie]);
 
 	useEffect(() => {
 		setProfileForm({
@@ -1843,10 +1798,6 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 
 	useEffect(() => {
 		if (useLocalPersistence) return;
-		if (!process.env.NEXT_PUBLIC_NEON_AUTH_URL) {
-			setPersistStatus({ state: 'error', message: 'Missing auth env vars.' });
-			return;
-		}
 		if (!userId) {
 			setPersistStatus({ state: 'error', message: 'Not signed in. Persistence disabled.' });
 			return;
@@ -2704,13 +2655,13 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 									className="text-[10px] font-bold px-2 py-1 rounded border border-[#f27a93]/40 text-[#ff9aaa] hover:bg-[#f27a93]/15 transition"
 									onClick={async () => {
 										try {
-											await fetch('/api/auth', { method: 'DELETE', credentials: 'include' });
 											await auth.signOut({ fetchOptions: { throw: true } });
 										} finally {
 											setIsAuthSynced(false);
 											setAuthSyncError(null);
+											setSessionData(null);
 											setIsAccountOpen(false);
-											window.location.href = '/auth/sign-in';
+											window.location.href = '/login';
 										}
 									}}
 								>
