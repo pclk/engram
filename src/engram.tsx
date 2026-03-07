@@ -420,6 +420,7 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 	const saveTimersRef = useRef<Record<string, number>>({});
 	const lastSavedRef = useRef<Record<string, string>>({});
 	const remoteTopicIdsRef = useRef<Set<string>>(new Set());
+	const sessionDataRef = useRef<any>(null);
 	const sessionBootstrapRef = useRef<Promise<boolean> | null>(null);
 	const reloginPromptedRef = useRef(false);
 
@@ -525,7 +526,7 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 			setIsAuthSynced(true);
 			return;
 		}
-		const session = sessionPayload ?? sessionData;
+		const session = sessionPayload ?? sessionDataRef.current;
 		if (!hasActiveSession(session)) {
 			setIsAuthSynced(false);
 			setAuthSyncError('Not signed in.');
@@ -533,15 +534,7 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 		}
 		setAuthSyncError(null);
 		setIsAuthSynced(true);
-	}, [hasActiveSession, sessionData, useLocalPersistence]);
-
-	const verifyServerSession = useCallback(async () => {
-		if (useLocalPersistence) return;
-		const response = await requestWithAuth('/api/session');
-		if (!response.ok) throw new Error(`Session verification failed (${response.status}).`);
-		const payload = await response.json();
-		if (!payload?.data?.userId) throw new Error('Session verification failed (missing authenticated user).');
-	}, [requestWithAuth, useLocalPersistence]);
+	}, [hasActiveSession, useLocalPersistence]);
 
 	const queueSaveTopic = useCallback((nextTopic: Topic) => {
 		if (useLocalPersistence || !userId || !isHydrated || !isAuthSynced) return;
@@ -1764,7 +1757,7 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 		return () => {
 			isActive = false;
 		};
-	}, [auth, isAccountOpen, guestMode, syncAuthCookie]);
+	}, [auth, guestMode, syncAuthCookie]);
 
 	useEffect(() => {
 		if (guestMode) return;
@@ -1788,6 +1781,10 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 			if (typeof unsubscribe === 'function') unsubscribe();
 		};
 	}, [auth, guestMode, syncAuthCookie]);
+
+	useEffect(() => {
+		sessionDataRef.current = sessionData;
+	}, [sessionData]);
 
 	useEffect(() => {
 		setProfileForm({
@@ -1846,7 +1843,6 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 			if (!userId) return;
 			if (!isAuthSynced) return;
 			try {
-				await verifyServerSession();
 				const response = await requestWithAuth('/api/content');
 				if (!response.ok) throw new Error(`Load failed (${response.status})`);
 				const payload = listContentResponseSchema.parse(await response.json());
@@ -1878,7 +1874,7 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 		return () => {
 			isActive = false;
 		};
-	}, [formatPersistError, isAuthSynced, isHydrated, queueSaveTopic, requestWithAuth, resetHistory, userId, useLocalPersistence, verifyServerSession]);
+	}, [formatPersistError, isAuthSynced, isHydrated, queueSaveTopic, requestWithAuth, resetHistory, userId, useLocalPersistence]);
 
 	useEffect(() => {
 		normalCursorRef.current = normalCursor;
