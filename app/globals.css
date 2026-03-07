@@ -4,7 +4,6 @@
 
 @import '../src/auth-theme.css';
 @import '../src/engram-markdown.css';
-@import '@neondatabase/neon-js/ui/css';
 
 .char-cursor {
 	background-color: #9ece6a;

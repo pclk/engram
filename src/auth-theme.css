@@ -122,3 +122,133 @@
 .neon-auth-links a:hover {
 	color: #bb9af7;
 }
+
+.neon-auth-panel h2 {
+	margin: 0 0 1rem;
+	font-size: 0.82rem;
+	font-weight: 700;
+	letter-spacing: 0.07em;
+	text-transform: uppercase;
+}
+
+.neon-auth-form {
+	display: flex;
+	flex-direction: column;
+	gap: 0.7rem;
+}
+
+.neon-auth-field {
+	display: flex;
+	flex-direction: column;
+	gap: 0.35rem;
+}
+
+.neon-auth-field span {
+	font-size: 0.66rem;
+	letter-spacing: 0.05em;
+	color: #9aa5cd;
+	text-transform: uppercase;
+}
+
+.neon-auth-field input {
+	border: 1px solid #2a2f45;
+	border-radius: 0.7rem;
+	background: #1f2335;
+	color: #c0caf5;
+	padding: 0.6rem 0.7rem;
+	font-size: 0.82rem;
+	outline: none;
+}
+
+.neon-auth-field input:focus {
+	border-color: #7aa2f7;
+	box-shadow: 0 0 0 2px rgba(122, 162, 247, 0.15);
+}
+
+.neon-auth-button {
+	margin-top: 0.2rem;
+	border: 1px solid #7aa2f7;
+	border-radius: 0.72rem;
+	background: #7aa2f7;
+	color: #1a1b26;
+	padding: 0.62rem 0.75rem;
+	font-size: 0.78rem;
+	font-weight: 700;
+	letter-spacing: 0.04em;
+	cursor: pointer;
+}
+
+.neon-auth-button:disabled {
+	opacity: 0.6;
+	cursor: not-allowed;
+}
+
+.neon-auth-note {
+	margin: 0.85rem 0 0;
+	font-size: 0.7rem;
+	color: #9aa5cd;
+	letter-spacing: 0.03em;
+}
+
+.neon-auth-note a {
+	color: #7aa2f7;
+	text-decoration: none;
+}
+
+.neon-auth-note a:hover {
+	color: #bb9af7;
+}
+
+.neon-auth-status {
+	margin: 0.8rem 0 0;
+	font-size: 0.7rem;
+	letter-spacing: 0.03em;
+}
+
+.neon-auth-status--success {
+	color: #9ece6a;
+}
+
+.neon-auth-status--error {
+	color: #f7768e;
+}
+
+.neon-auth-debug {
+	margin-top: 1rem;
+	padding-top: 1rem;
+	border-top: 1px solid #2a2f45;
+}
+
+.neon-auth-debug h3 {
+	margin: 0 0 0.75rem;
+	font-size: 0.68rem;
+	font-weight: 700;
+	letter-spacing: 0.08em;
+	text-transform: uppercase;
+	color: #9aa5cd;
+}
+
+.neon-auth-debug-entry + .neon-auth-debug-entry {
+	margin-top: 0.75rem;
+}
+
+.neon-auth-debug-entry p {
+	margin: 0 0 0.3rem;
+	font-size: 0.65rem;
+	color: #7aa2f7;
+	letter-spacing: 0.04em;
+}
+
+.neon-auth-debug-entry pre {
+	margin: 0;
+	padding: 0.65rem;
+	border: 1px solid #2a2f45;
+	border-radius: 0.65rem;
+	background: #16161e;
+	color: #c0caf5;
+	font-size: 0.66rem;
+	line-height: 1.45;
+	white-space: pre-wrap;
+	word-break: break-word;
+	overflow-x: auto;
+}

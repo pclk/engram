@@ -1,3 +1,3 @@
 'use client';
 
-export { authClient, getAuthClientOrThrow, MissingNeonConfigError, neonConfigDiagnostics } from './auth';
+export { authClient, getAuthClientOrThrow, neonConfigDiagnostics } from './auth';

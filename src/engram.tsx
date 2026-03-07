@@ -19,6 +19,11 @@ import {
 	toTopicContent
 } from '@/lib/schemas/content';
 import type { Concept, Derivative, DerivativeType, TopicContent as Topic } from '@/lib/schemas/topic';
+import {
+	DEFAULT_WALLPAPER_OPACITY,
+	normalizeWallpaperOpacity,
+	type WallpaperOption
+} from '@/src/lib/wallpapers';
 
 // --- Configuration & Types ---
 
@@ -27,6 +32,13 @@ type Mode = 'BLOCK' | 'NORMAL' | 'INSERT';
 type YankedItem =
 	| { kind: 'concept'; concept: Concept }
 	| { kind: 'derivative'; derivative: Derivative };
+type TopicMenuSnapshot = {
+	topics: Topic[];
+	activeTopicId: string;
+	topicDrafts: Record<string, string>;
+	folderDrafts: Record<string, string>;
+	topicMenuIndex: number;
+};
 
 const NORMAL_FAST_RENDER_LIMIT = 2000;
 
@@ -40,6 +52,8 @@ interface HistoryState {
 const isE2E = process.env.NEXT_PUBLIC_E2E === 'true';
 const LOCAL_TOPICS_KEY = 'engram.topics.v1';
 const LOCAL_ACTIVE_TOPIC_KEY = 'engram.activeTopicId.v1';
+const WALLPAPER_FILENAME_KEY = 'engram.wallpaper.filename.v1';
+const WALLPAPER_OPACITY_KEY = 'engram.wallpaper.opacity.v1';
 
 const generateId = () => {
 	const webCrypto = typeof globalThis !== 'undefined' ? globalThis.crypto : undefined;
@@ -223,6 +237,15 @@ const clampStyle = (shouldClamp: boolean): React.CSSProperties => (
 		}
 );
 
+const cloneTopics = (items: Topic[]): Topic[] =>
+	items.map(item => ({
+		...item,
+		concepts: item.concepts.map(concept => ({
+			...concept,
+			derivatives: concept.derivatives.map(derivative => ({ ...derivative }))
+		}))
+	}));
+
 const isUuid = (value: string) =>
 	/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
 
@@ -372,6 +395,24 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 	const [ankifyStatus, setAnkifyStatus] = useState<'IDLE' | 'SUCCESS'>('IDLE');
 	const [isAccountOpen, setIsAccountOpen] = useState(false);
 	const [isDocumentSwitcherOpen, setIsDocumentSwitcherOpen] = useState(false);
+	const [wallpaperOptions, setWallpaperOptions] = useState<WallpaperOption[]>([]);
+	const [wallpaperLoadStatus, setWallpaperLoadStatus] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle');
+	const [selectedWallpaperFilename, setSelectedWallpaperFilename] = useState<string | null>(() => {
+		try {
+			if (typeof window === 'undefined') return null;
+			return localStorage.getItem(WALLPAPER_FILENAME_KEY);
+		} catch {
+			return null;
+		}
+	});
+	const [backgroundOpacity, setBackgroundOpacity] = useState(() => {
+		try {
+			if (typeof window === 'undefined') return DEFAULT_WALLPAPER_OPACITY;
+			return normalizeWallpaperOpacity(localStorage.getItem(WALLPAPER_OPACITY_KEY));
+		} catch {
+			return DEFAULT_WALLPAPER_OPACITY;
+		}
+	});
 	const [showKeyBuffer, setShowKeyBuffer] = useState(() => {
 		try {
 			const stored = localStorage.getItem('engram.showKeyBuffer');
@@ -410,6 +451,8 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 	const [topicMenuIndex, setTopicMenuIndex] = useState(0);
 	const topicMenuIndexRef = useRef(0);
 	const [topicMenuEditingTarget, setTopicMenuEditingTarget] = useState<{ id: string; field: 'title' | 'folder' } | null>(null);
+	const [topicMenuDeletePending, setTopicMenuDeletePending] = useState(false);
+	const topicMenuUndoStackRef = useRef<TopicMenuSnapshot[]>([]);
 	const [lastCopiedMarkdown, setLastCopiedMarkdown] = useState('');
 	const [toastMessage, setToastMessage] = useState<string | null>(null);
 	const [persistStatus, setPersistStatus] = useState<{
@@ -420,6 +463,7 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 	const saveTimersRef = useRef<Record<string, number>>({});
 	const lastSavedRef = useRef<Record<string, string>>({});
 	const remoteTopicIdsRef = useRef<Set<string>>(new Set());
+	const sessionDataRef = useRef<any>(null);
 	const sessionBootstrapRef = useRef<Promise<boolean> | null>(null);
 	const reloginPromptedRef = useRef(false);
 
@@ -427,18 +471,11 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 	const currentDeriv = (derivIdx >= 0 && currentConcept && currentConcept.derivatives.length > derivIdx)
 		? currentConcept.derivatives[derivIdx]
 		: null;
+	const activeWallpaper = wallpaperOptions.find(item => item.filename === selectedWallpaperFilename) ?? null;
 	const userId = (user?.id || null) as string | null;
 	const persistMessage = persistStatus.message
 		?? (persistStatus.state === 'error' ? 'Unknown persistence error.' : undefined);
-	const authSyncInFlightRef = useRef<Promise<void> | null>(null);
-	const getAccessTokenFromSession = useCallback((sessionPayload: any): string | null => {
-		if (!sessionPayload) return null;
-		const token = sessionPayload?.tokens?.accessToken
-			?? sessionPayload?.session?.token
-			?? sessionPayload?.session?.accessToken
-			?? null;
-		return typeof token === 'string' && token.length > 0 ? token : null;
-	}, []);
+	const hasActiveSession = useCallback((sessionPayload: any) => Boolean(sessionPayload?.session && sessionPayload?.user), []);
 
 	const formatPersistError = useCallback((error: unknown) => {
 		if (!error) return 'Unknown persistence error.';
@@ -518,7 +555,7 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 			});
 			setToastMessage('Session expired. Redirecting to sign-in…');
 			window.setTimeout(() => {
-				window.location.href = '/auth/sign-in';
+				window.location.href = '/login';
 			}, 500);
 		}
 		return false;
@@ -533,60 +570,15 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 			setIsAuthSynced(true);
 			return;
 		}
-		const session = sessionPayload ?? sessionData;
-		const accessToken = getAccessTokenFromSession(session);
-		if (!accessToken) {
+		const session = sessionPayload ?? sessionDataRef.current;
+		if (!hasActiveSession(session)) {
 			setIsAuthSynced(false);
-			setAuthSyncError('Auth token missing. Please sign in again.');
-			throw new Error('Auth token missing.');
+			setAuthSyncError('Not signed in.');
+			throw new Error('No active session.');
 		}
-		if (authSyncInFlightRef.current) {
-			await authSyncInFlightRef.current;
-			return;
-		}
-
-		const attemptSync = async () => {
-			const maxAttempts = 3;
-			for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-					try {
-						const response = await fetch('/api/auth', {
-							method: 'POST',
-							headers: {
-								'Content-Type': 'application/json',
-								Authorization: `Bearer ${accessToken}`
-							},
-							credentials: 'include',
-							body: JSON.stringify({ accessToken })
-						});
-					if (!response.ok) throw new Error(`Auth bootstrap failed (${response.status}).`);
-					setAuthSyncError(null);
-					setIsAuthSynced(true);
-					return;
-				} catch (error) {
-					if (attempt === maxAttempts) {
-						setIsAuthSynced(false);
-						setAuthSyncError(formatPersistError(error));
-						throw error;
-					}
-					const backoffMs = 300 * 2 ** (attempt - 1);
-					await new Promise(resolve => setTimeout(resolve, backoffMs));
-				}
-			}
-		};
-
-		authSyncInFlightRef.current = attemptSync().finally(() => {
-			authSyncInFlightRef.current = null;
-		});
-		await authSyncInFlightRef.current;
-	}, [formatPersistError, getAccessTokenFromSession, sessionData, useLocalPersistence]);
-
-	const verifyServerSession = useCallback(async () => {
-		if (useLocalPersistence) return;
-		const response = await requestWithAuth('/api/session');
-		if (!response.ok) throw new Error(`Session verification failed (${response.status}).`);
-		const payload = await response.json();
-		if (!payload?.data?.userId) throw new Error('Session verification failed (missing authenticated user).');
-	}, [requestWithAuth, useLocalPersistence]);
+		setAuthSyncError(null);
+		setIsAuthSynced(true);
+	}, [hasActiveSession, useLocalPersistence]);
 
 	const queueSaveTopic = useCallback((nextTopic: Topic) => {
 		if (useLocalPersistence || !userId || !isHydrated || !isAuthSynced) return;
@@ -663,6 +655,58 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 		}
 	};
 
+	const snapshotTopicMenuState = useCallback((): TopicMenuSnapshot => ({
+		topics: cloneTopics(topics),
+		activeTopicId,
+		topicDrafts: { ...topicDrafts },
+		folderDrafts: { ...folderDrafts },
+		topicMenuIndex
+	}), [topics, activeTopicId, topicDrafts, folderDrafts, topicMenuIndex]);
+
+	const pushTopicMenuUndoSnapshot = useCallback(() => {
+		topicMenuUndoStackRef.current = [
+			...topicMenuUndoStackRef.current,
+			snapshotTopicMenuState()
+		].slice(-50);
+	}, [snapshotTopicMenuState]);
+
+	const undoTopicMenuChange = useCallback(() => {
+		const snapshot = topicMenuUndoStackRef.current.pop();
+		if (!snapshot) return;
+
+		const snapshotIds = new Set(snapshot.topics.map(item => item.id));
+		const currentIds = new Set(topics.map(item => item.id));
+
+		topics.forEach(item => {
+			if (!snapshotIds.has(item.id)) {
+				void deletePersistedTopic(item.id);
+			}
+		});
+		snapshot.topics.forEach(item => {
+			if (!currentIds.has(item.id) || topics.find(existing => existing.id === item.id)?.title !== item.title || topics.find(existing => existing.id === item.id)?.folder !== item.folder) {
+				queueSaveTopic(item);
+			}
+		});
+
+		setTopics(snapshot.topics);
+		setActiveTopicId(snapshot.activeTopicId);
+		setTopicDrafts(snapshot.topicDrafts);
+		setFolderDrafts(snapshot.folderDrafts);
+		const nextIndex = Math.min(snapshot.topicMenuIndex, Math.max(0, snapshot.topics.length - 1));
+		setTopicMenuIndex(nextIndex);
+		topicMenuIndexRef.current = nextIndex;
+		setTopicMenuEditingTarget(null);
+		setTopicMenuDeletePending(false);
+
+		const restoredActive = snapshot.topics.find(item => item.id === snapshot.activeTopicId) ?? snapshot.topics[0];
+		if (!restoredActive) return;
+		if (hStateRef.current.topic.id === restoredActive.id) {
+			setHState(prev => ({ ...prev, topic: restoredActive }));
+			return;
+		}
+		resetHistory({ topic: restoredActive, cursorIdx: 0, derivIdx: -1 });
+	}, [deletePersistedTopic, queueSaveTopic, resetHistory, setHState, topics]);
+
 	const openTopic = (id: string) => {
 		commitTopicMetaDraft(id);
 		const target = topics.find(item => item.id === id);
@@ -681,6 +725,7 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 	};
 
 	const createTopic = () => {
+		pushTopicMenuUndoSnapshot();
 		const newTopic = createEmptyTopic();
 		setTopics(prev => [...prev, newTopic]);
 		setActiveTopicId(newTopic.id);
@@ -699,6 +744,7 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 		const nextTitle = shouldCommitTitle ? (topicDrafts[id] ?? target.title) : target.title;
 		const nextFolder = shouldCommitFolder ? (folderDrafts[id] ?? target.folder) : target.folder;
 		if (nextTitle === target.title && nextFolder === target.folder) return;
+		pushTopicMenuUndoSnapshot();
 		const updated = {
 			...target,
 			title: nextTitle,
@@ -726,6 +772,7 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 	};
 
 	const deleteTopic = (id: string) => {
+		pushTopicMenuUndoSnapshot();
 		setTopics(prev => {
 			const filtered = prev.filter(item => item.id !== id);
 			const nextTopics = filtered.length ? filtered : [createEmptyTopic()];
@@ -1189,14 +1236,27 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 			if (isDocumentSwitcherOpen) {
 				if (!isTextInput) {
 					e.preventDefault();
-					if (e.key === 'Escape') {
-						setIsDocumentSwitcherOpen(false);
-						setTopicMenuEditingTarget(null);
-						return;
-					}
-					if (e.key === 'j') {
-						const nextIndex = Math.min(topicMenuIndexRef.current + 1, Math.max(0, topics.length - 1));
-						topicMenuIndexRef.current = nextIndex;
+				if (e.key === 'Escape') {
+							setIsDocumentSwitcherOpen(false);
+							setTopicMenuEditingTarget(null);
+							setTopicMenuDeletePending(false);
+							return;
+						}
+						if (e.key === 'u') {
+							undoTopicMenuChange();
+							return;
+						}
+						if (topicMenuDeletePending) {
+							setTopicMenuDeletePending(false);
+							if (e.key === 'd') {
+								const target = topics[topicMenuIndexRef.current];
+								if (target) deleteTopic(target.id);
+								return;
+							}
+						}
+						if (e.key === 'j') {
+							const nextIndex = Math.min(topicMenuIndexRef.current + 1, Math.max(0, topics.length - 1));
+							topicMenuIndexRef.current = nextIndex;
 						setTopicMenuIndex(nextIndex);
 						return;
 					}
@@ -1206,15 +1266,14 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 						setTopicMenuIndex(nextIndex);
 						return;
 					}
-					if (e.key === 'o') {
-						createTopic();
-						return;
-					}
-					if (e.key === 'd') {
-						const target = topics[topicMenuIndexRef.current];
-						if (target) deleteTopic(target.id);
-						return;
-					}
+						if (e.key === 'o') {
+							createTopic();
+							return;
+						}
+						if (e.key === 'd') {
+							setTopicMenuDeletePending(true);
+							return;
+						}
 					if (e.key === 'c') {
 						const target = topics[topicMenuIndexRef.current];
 						if (target) {
@@ -1242,11 +1301,12 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 					}
 					return;
 				}
-				if (e.key === 'Escape') {
-					e.preventDefault();
-					setTopicMenuEditingTarget(null);
-					return;
-				}
+					if (e.key === 'Escape') {
+						e.preventDefault();
+						setTopicMenuEditingTarget(null);
+						setTopicMenuDeletePending(false);
+						return;
+					}
 				if (e.key === 'Enter') {
 					e.preventDefault();
 					const targetId = topicMenuEditingTarget?.id;
@@ -1781,7 +1841,7 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 		if (guestMode) return;
 		const { data } = await auth.getSession();
 		setSessionData(data ?? null);
-		if (getAccessTokenFromSession(data)) {
+		if (data?.session) {
 			try {
 				await syncAuthCookie(data);
 			} catch (error) {
@@ -1797,7 +1857,7 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 			const { data } = await auth.getSession();
 			if (!isActive) return;
 			setSessionData(data ?? null);
-			if (getAccessTokenFromSession(data)) {
+			if (data?.session) {
 				try {
 					await syncAuthCookie(data);
 				} catch (error) {
@@ -1809,7 +1869,7 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 		return () => {
 			isActive = false;
 		};
-	}, [auth, getAccessTokenFromSession, isAccountOpen, guestMode, syncAuthCookie]);
+	}, [auth, guestMode, syncAuthCookie]);
 
 	useEffect(() => {
 		if (guestMode) return;
@@ -1817,7 +1877,7 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 		if (typeof maybeSubscribe !== 'function') return;
 		const subscription = maybeSubscribe.call(auth, async (event: string, payload: any) => {
 			setSessionData(payload ?? null);
-			if (!getAccessTokenFromSession(payload)) {
+			if (!payload?.session) {
 				setIsAuthSynced(false);
 				setAuthSyncError(null);
 				return;
@@ -1832,7 +1892,11 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 			const unsubscribe = subscription?.unsubscribe ?? subscription;
 			if (typeof unsubscribe === 'function') unsubscribe();
 		};
-	}, [auth, getAccessTokenFromSession, guestMode, syncAuthCookie]);
+	}, [auth, guestMode, syncAuthCookie]);
+
+	useEffect(() => {
+		sessionDataRef.current = sessionData;
+	}, [sessionData]);
 
 	useEffect(() => {
 		setProfileForm({
@@ -1843,10 +1907,6 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 
 	useEffect(() => {
 		if (useLocalPersistence) return;
-		if (!process.env.NEXT_PUBLIC_NEON_AUTH_URL) {
-			setPersistStatus({ state: 'error', message: 'Missing auth env vars.' });
-			return;
-		}
 		if (!userId) {
 			setPersistStatus({ state: 'error', message: 'Not signed in. Persistence disabled.' });
 			return;
@@ -1895,7 +1955,6 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 			if (!userId) return;
 			if (!isAuthSynced) return;
 			try {
-				await verifyServerSession();
 				const response = await requestWithAuth('/api/content');
 				if (!response.ok) throw new Error(`Load failed (${response.status})`);
 				const payload = listContentResponseSchema.parse(await response.json());
@@ -1927,7 +1986,7 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 		return () => {
 			isActive = false;
 		};
-	}, [formatPersistError, isAuthSynced, isHydrated, queueSaveTopic, requestWithAuth, resetHistory, userId, useLocalPersistence, verifyServerSession]);
+	}, [formatPersistError, isAuthSynced, isHydrated, queueSaveTopic, requestWithAuth, resetHistory, userId, useLocalPersistence]);
 
 	useEffect(() => {
 		normalCursorRef.current = normalCursor;
@@ -1969,6 +2028,7 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 		setTopicMenuIndex(nextIndex);
 		topicMenuIndexRef.current = nextIndex;
 		setTopicMenuEditingTarget(null);
+		setTopicMenuDeletePending(false);
 	}, [isDocumentSwitcherOpen, topics, activeTopicId]);
 
 	useEffect(() => {
@@ -2019,6 +2079,59 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 			// ignore storage errors
 		}
 	}, [showKeyBuffer]);
+
+	useEffect(() => {
+		let cancelled = false;
+
+		const loadWallpapers = async () => {
+			setWallpaperLoadStatus('loading');
+			try {
+				const response = await fetch('/api/wallpapers', { cache: 'no-store' });
+				if (!response.ok) {
+					throw new Error(`Wallpaper request failed with status ${response.status}.`);
+				}
+
+				const payload = await response.json() as {
+					data?: { wallpapers?: WallpaperOption[] };
+				};
+				const wallpapers = Array.isArray(payload?.data?.wallpapers) ? payload.data.wallpapers : [];
+
+				if (cancelled) return;
+				setWallpaperOptions(wallpapers);
+				setWallpaperLoadStatus('ready');
+				setSelectedWallpaperFilename(prev =>
+					prev && wallpapers.some(item => item.filename === prev) ? prev : null
+				);
+			} catch {
+				if (cancelled) return;
+				setWallpaperOptions([]);
+				setWallpaperLoadStatus('error');
+			}
+		};
+
+		void loadWallpapers();
+
+		return () => {
+			cancelled = true;
+		};
+	}, []);
+
+	useEffect(() => {
+		try {
+			if (selectedWallpaperFilename) localStorage.setItem(WALLPAPER_FILENAME_KEY, selectedWallpaperFilename);
+			else localStorage.removeItem(WALLPAPER_FILENAME_KEY);
+		} catch {
+			// ignore storage errors
+		}
+	}, [selectedWallpaperFilename]);
+
+	useEffect(() => {
+		try {
+			localStorage.setItem(WALLPAPER_OPACITY_KEY, String(backgroundOpacity));
+		} catch {
+			// ignore storage errors
+		}
+	}, [backgroundOpacity]);
 
 	useEffect(() => {
 		document.body.style.overflow = isAccountOpen ? 'hidden' : '';
@@ -2409,8 +2522,20 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 	});
 
 	return (
-		<div className="flex flex-col h-screen overflow-hidden font-sans">
-			<div className="p-4 flex justify-between items-center z-10 h-16 absolute top-0 left-0 right-0">
+		<div className="relative isolate flex flex-col h-screen overflow-hidden bg-[#0d111b] font-sans">
+			{activeWallpaper && (
+				<div aria-hidden className="pointer-events-none absolute inset-0 z-0 overflow-hidden">
+					<div
+						className="absolute inset-0 bg-cover bg-center bg-no-repeat transition-opacity duration-300"
+						style={{
+							backgroundImage: `url("${activeWallpaper.src}")`,
+							opacity: backgroundOpacity / 100
+						}}
+					/>
+					<div className="absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(10,12,20,0.08),rgba(10,12,20,0.42)_52%,rgba(10,12,20,0.72)_100%)]" />
+				</div>
+			)}
+				<div className="p-4 flex justify-between items-center z-20 h-16 absolute top-0 left-0 right-0">
 				<div className="flex items-center gap-3">
 					<Image
 						src="/logo.svg"
@@ -2469,11 +2594,11 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 				</div>
 			)}
 
-			<div
-				ref={scrollContainerRef}
-				className="flex-1 overflow-y-auto p-8 pt-24 relative"
-				data-testid="scroll-container"
-			>
+				<div
+					ref={scrollContainerRef}
+					className="relative flex-1 overflow-y-auto p-8 pt-24"
+					data-testid="scroll-container"
+				>
 				<div className="max-w-3xl mx-auto pb-20 space-y-6">
 					{topic.concepts.map((concept, cIdx) => {
 						const isConceptActive = cursorIdx === cIdx && derivIdx === -1;
@@ -2672,7 +2797,7 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 
 			<div data-testid="markdown-copy" style={{ display: 'none' }}>{lastCopiedMarkdown}</div>
 
-			<div className={`p-1 flex justify-between items-center text-[10px] font-bold uppercase text-[#1a1b26] transition-colors duration-200 ${getStatusColor()}`}>
+			<div className={`relative p-1 flex justify-between items-center text-[10px] font-bold uppercase text-[#1a1b26] transition-colors duration-200 ${getStatusColor()}`}>
 				<div className="flex gap-4 px-2">
 					<span>{getModeLabel()}</span>
 					<span className="opacity-70">{cursorIdx + 1}:{derivIdx + 1}</span>
@@ -2688,29 +2813,29 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 						<div className="flex items-center justify-between border-b border-[#1f2536] bg-[#171c28] px-5 py-4">
 							<div className="flex items-center gap-3">
 								<Image src="/logo.svg" alt="Engram" className="w-20 h-5 object-contain" width={80} height={20} />
-								<div>
-									<div className="text-[11px] font-bold tracking-[0.2em] text-[#cbd3f2]">ACCOUNT</div>
-									<div className="text-[10px] text-[#94a0c6]">Manage your profile & security</div>
+									<div>
+										<div className="text-sm font-bold tracking-[0.2em] text-[#cbd3f2]">ACCOUNT</div>
+										<div className="text-sm text-[#94a0c6]">Manage your profile & security</div>
+									</div>
 								</div>
-							</div>
-							<div className="flex items-center gap-2">
-								<button
-									className="text-[10px] font-bold px-2 py-1 rounded border border-[#5b79d6]/40 text-[#9bb2ff] hover:bg-[#5b79d6]/15 transition"
-									onClick={() => setIsAccountOpen(false)}
-								>
-									CLOSE
-								</button>
-								<button
-									className="text-[10px] font-bold px-2 py-1 rounded border border-[#f27a93]/40 text-[#ff9aaa] hover:bg-[#f27a93]/15 transition"
+								<div className="flex items-center gap-2">
+									<button
+										className="text-sm font-bold px-2 py-1 rounded border border-[#5b79d6]/40 text-[#9bb2ff] hover:bg-[#5b79d6]/15 transition"
+										onClick={() => setIsAccountOpen(false)}
+									>
+										CLOSE
+									</button>
+									<button
+										className="text-sm font-bold px-2 py-1 rounded border border-[#f27a93]/40 text-[#ff9aaa] hover:bg-[#f27a93]/15 transition"
 									onClick={async () => {
 										try {
-											await fetch('/api/auth', { method: 'DELETE', credentials: 'include' });
 											await auth.signOut({ fetchOptions: { throw: true } });
 										} finally {
 											setIsAuthSynced(false);
 											setAuthSyncError(null);
+											setSessionData(null);
 											setIsAccountOpen(false);
-											window.location.href = '/auth/sign-in';
+											window.location.href = '/login';
 										}
 									}}
 								>
@@ -2719,8 +2844,8 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 							</div>
 						</div>
 						<div className="max-h-[calc(85vh-64px)] overflow-y-auto p-5 space-y-5">
-							<div className="rounded-xl border border-[#22283a] bg-[#161b27] p-4">
-								<div className="text-[11px] font-bold tracking-[0.2em] text-[#cbd3f2]">PROFILE</div>
+								<div className="rounded-xl border border-[#22283a] bg-[#161b27] p-4">
+									<div className="text-sm font-bold tracking-[0.2em] text-[#cbd3f2]">PROFILE</div>
 								<div className="mt-4 grid gap-4 md:grid-cols-[140px_1fr]">
 									<div className="flex flex-col items-start gap-3">
 										<div className="h-16 w-16 rounded-full border border-[#283049] bg-[#101521] overflow-hidden">
@@ -2732,8 +2857,8 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 												</div>
 											)}
 										</div>
-										<div className="flex flex-col gap-2">
-											<label className="text-[10px] uppercase tracking-[0.2em] text-[#7f8bb4]">Avatar</label>
+											<div className="flex flex-col gap-2">
+												<label className="text-sm uppercase tracking-[0.2em] text-[#7f8bb4]">Avatar</label>
 											<div className="flex items-center gap-2">
 												<input
 													id="avatar-upload"
@@ -2761,16 +2886,16 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 															e.target.value = '';
 														}
 													}} />
-												<button
-													className="text-[10px] font-bold px-2.5 py-1 rounded border border-[#2a3350] text-[#9bb2ff] hover:bg-[#2a3350]/30 transition"
+													<button
+														className="text-sm font-bold px-2.5 py-1 rounded border border-[#2a3350] text-[#9bb2ff] hover:bg-[#2a3350]/30 transition"
 													onClick={() => document.getElementById('avatar-upload')?.click()}
 													disabled={avatarStatus.type === 'saving'}
 												>
 													Upload
 												</button>
 												{user?.image && (
-													<button
-														className="text-[10px] font-bold px-2.5 py-1 rounded border border-[#3a2530] text-[#ff9aaa] hover:bg-[#3a2530]/40 transition"
+														<button
+															className="text-sm font-bold px-2.5 py-1 rounded border border-[#3a2530] text-[#ff9aaa] hover:bg-[#3a2530]/40 transition"
 														onClick={async () => {
 															setAvatarStatus({ type: 'saving' });
 															try {
@@ -2788,36 +2913,36 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 													</button>
 												)}
 											</div>
-											{avatarStatus.message && (
-												<div className={`text-[10px] ${avatarStatus.type === 'error' ? 'text-[#ff9aaa]' : 'text-[#9ece6a]'}`}>
+												{avatarStatus.message && (
+													<div className={`text-sm ${avatarStatus.type === 'error' ? 'text-[#ff9aaa]' : 'text-[#9ece6a]'}`}>
 													{avatarStatus.message}
 												</div>
 											)}
 										</div>
 									</div>
 									<div className="space-y-3">
-										<div>
-											<label className="text-[10px] uppercase tracking-[0.2em] text-[#7f8bb4]">Name</label>
-											<input
-												value={profileForm.name}
-												onChange={(e) => setProfileForm(prev => ({ ...prev, name: e.target.value }))}
-												className="mt-1 w-full rounded-lg border border-[#283049] bg-[#101521] px-3 py-2 text-[12px] text-[#cbd3f2] outline-none focus:border-[#5b79d6]/70"
-												placeholder="Your name"
-											/>
-										</div>
-										<div>
-											<label className="text-[10px] uppercase tracking-[0.2em] text-[#7f8bb4]">Email</label>
-											<input
-												type="email"
-												value={profileForm.email}
-												onChange={(e) => setProfileForm(prev => ({ ...prev, email: e.target.value }))}
-												className="mt-1 w-full rounded-lg border border-[#283049] bg-[#101521] px-3 py-2 text-[12px] text-[#cbd3f2] outline-none focus:border-[#5b79d6]/70"
-												placeholder="you@example.com"
-											/>
-										</div>
-										<div className="flex items-center gap-3">
-											<button
-												className="text-[10px] font-bold px-3 py-1.5 rounded border border-[#2a3350] text-[#9bb2ff] hover:bg-[#2a3350]/30 transition"
+											<div>
+												<label className="text-sm uppercase tracking-[0.2em] text-[#7f8bb4]">Name</label>
+												<input
+													value={profileForm.name}
+													onChange={(e) => setProfileForm(prev => ({ ...prev, name: e.target.value }))}
+													className="mt-1 w-full rounded-lg border border-[#283049] bg-[#101521] px-3 py-2 text-base text-[#cbd3f2] outline-none focus:border-[#5b79d6]/70"
+													placeholder="Your name"
+												/>
+											</div>
+											<div>
+												<label className="text-sm uppercase tracking-[0.2em] text-[#7f8bb4]">Email</label>
+												<input
+													type="email"
+													value={profileForm.email}
+													onChange={(e) => setProfileForm(prev => ({ ...prev, email: e.target.value }))}
+													className="mt-1 w-full rounded-lg border border-[#283049] bg-[#101521] px-3 py-2 text-base text-[#cbd3f2] outline-none focus:border-[#5b79d6]/70"
+													placeholder="you@example.com"
+												/>
+											</div>
+											<div className="flex items-center gap-3">
+												<button
+													className="text-sm font-bold px-3 py-1.5 rounded border border-[#2a3350] text-[#9bb2ff] hover:bg-[#2a3350]/30 transition"
 												onClick={async () => {
 													setProfileStatus({ type: 'saving' });
 													try {
@@ -2842,8 +2967,8 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 											>
 												Save profile
 											</button>
-											{profileStatus.message && (
-												<span className={`text-[10px] ${profileStatus.type === 'error' ? 'text-[#ff9aaa]' : 'text-[#9ece6a]'}`}>
+												{profileStatus.message && (
+													<span className={`text-sm ${profileStatus.type === 'error' ? 'text-[#ff9aaa]' : 'text-[#9ece6a]'}`}>
 													{profileStatus.message}
 												</span>
 											)}
@@ -2852,42 +2977,42 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 								</div>
 							</div>
 
-							<div className="rounded-xl border border-[#22283a] bg-[#161b27] p-4">
-								<div className="text-[11px] font-bold tracking-[0.2em] text-[#cbd3f2]">SECURITY</div>
-								<div className="mt-4 space-y-3">
-									<div>
-										<label className="text-[10px] uppercase tracking-[0.2em] text-[#7f8bb4]">Current password</label>
-										<input
-											type="password"
-											value={passwordForm.currentPassword}
-											onChange={(e) => setPasswordForm(prev => ({ ...prev, currentPassword: e.target.value }))}
-											className="mt-1 w-full rounded-lg border border-[#283049] bg-[#101521] px-3 py-2 text-[12px] text-[#cbd3f2] outline-none focus:border-[#5b79d6]/70"
-											placeholder="••••••••"
-										/>
-									</div>
-									<div>
-										<label className="text-[10px] uppercase tracking-[0.2em] text-[#7f8bb4]">New password</label>
-										<input
-											type="password"
-											value={passwordForm.newPassword}
-											onChange={(e) => setPasswordForm(prev => ({ ...prev, newPassword: e.target.value }))}
-											className="mt-1 w-full rounded-lg border border-[#283049] bg-[#101521] px-3 py-2 text-[12px] text-[#cbd3f2] outline-none focus:border-[#5b79d6]/70"
-											placeholder="At least 8 characters"
-										/>
-									</div>
-									<div>
-										<label className="text-[10px] uppercase tracking-[0.2em] text-[#7f8bb4]">Confirm new password</label>
-										<input
-											type="password"
-											value={passwordForm.confirmPassword}
-											onChange={(e) => setPasswordForm(prev => ({ ...prev, confirmPassword: e.target.value }))}
-											className="mt-1 w-full rounded-lg border border-[#283049] bg-[#101521] px-3 py-2 text-[12px] text-[#cbd3f2] outline-none focus:border-[#5b79d6]/70"
-											placeholder="Repeat new password"
-										/>
-									</div>
-									<div className="flex items-center gap-3">
-										<button
-											className="text-[10px] font-bold px-3 py-1.5 rounded border border-[#2a3350] text-[#9bb2ff] hover:bg-[#2a3350]/30 transition"
+								<div className="rounded-xl border border-[#22283a] bg-[#161b27] p-4">
+									<div className="text-sm font-bold tracking-[0.2em] text-[#cbd3f2]">SECURITY</div>
+									<div className="mt-4 space-y-3">
+										<div>
+											<label className="text-sm uppercase tracking-[0.2em] text-[#7f8bb4]">Current password</label>
+											<input
+												type="password"
+												value={passwordForm.currentPassword}
+												onChange={(e) => setPasswordForm(prev => ({ ...prev, currentPassword: e.target.value }))}
+												className="mt-1 w-full rounded-lg border border-[#283049] bg-[#101521] px-3 py-2 text-base text-[#cbd3f2] outline-none focus:border-[#5b79d6]/70"
+												placeholder="••••••••"
+											/>
+										</div>
+										<div>
+											<label className="text-sm uppercase tracking-[0.2em] text-[#7f8bb4]">New password</label>
+											<input
+												type="password"
+												value={passwordForm.newPassword}
+												onChange={(e) => setPasswordForm(prev => ({ ...prev, newPassword: e.target.value }))}
+												className="mt-1 w-full rounded-lg border border-[#283049] bg-[#101521] px-3 py-2 text-base text-[#cbd3f2] outline-none focus:border-[#5b79d6]/70"
+												placeholder="At least 8 characters"
+											/>
+										</div>
+										<div>
+											<label className="text-sm uppercase tracking-[0.2em] text-[#7f8bb4]">Confirm new password</label>
+											<input
+												type="password"
+												value={passwordForm.confirmPassword}
+												onChange={(e) => setPasswordForm(prev => ({ ...prev, confirmPassword: e.target.value }))}
+												className="mt-1 w-full rounded-lg border border-[#283049] bg-[#101521] px-3 py-2 text-base text-[#cbd3f2] outline-none focus:border-[#5b79d6]/70"
+												placeholder="Repeat new password"
+											/>
+										</div>
+										<div className="flex items-center gap-3">
+											<button
+												className="text-sm font-bold px-3 py-1.5 rounded border border-[#2a3350] text-[#9bb2ff] hover:bg-[#2a3350]/30 transition"
 											onClick={async () => {
 												setPasswordStatus({ type: 'saving' });
 												try {
@@ -2908,8 +3033,8 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 										>
 											Update password
 										</button>
-										{passwordStatus.message && (
-											<span className={`text-[10px] ${passwordStatus.type === 'error' ? 'text-[#ff9aaa]' : 'text-[#9ece6a]'}`}>
+											{passwordStatus.message && (
+												<span className={`text-sm ${passwordStatus.type === 'error' ? 'text-[#ff9aaa]' : 'text-[#9ece6a]'}`}>
 												{passwordStatus.message}
 											</span>
 										)}
@@ -2917,19 +3042,115 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 								</div>
 							</div>
 
-							<div className="rounded-xl border border-[#22283a] bg-[#161b27] p-4">
-								<div className="text-[11px] font-bold tracking-[0.2em] text-[#cbd3f2]">DISPLAY</div>
-								<div className="mt-2 flex items-center justify-between">
-									<div>
-										<div className="text-[10px] font-bold text-[#cbd3f2]">Keybuffer legend</div>
-										<div className="text-[10px] text-[#94a0c6]">Show the chord helper on the right</div>
+								<div className="rounded-xl border border-[#22283a] bg-[#161b27] p-4">
+									<div className="text-sm font-bold tracking-[0.2em] text-[#cbd3f2]">DISPLAY</div>
+									<div className="mt-4 space-y-4">
+										<div className="flex items-center justify-between gap-4">
+											<div>
+												<div className="text-sm font-bold text-[#cbd3f2]">Keybuffer legend</div>
+												<div className="text-sm text-[#94a0c6]">Show the chord helper on the right</div>
+											</div>
+											<button
+												className={`text-sm font-bold px-2 py-1 rounded border transition ${showKeyBuffer ? 'border-[#5b79d6]/50 text-[#9bb2ff] hover:bg-[#5b79d6]/15' : 'border-[#262c3f] text-[#94a0c6] hover:bg-[#1f2536]'}`}
+											onClick={() => setShowKeyBuffer(prev => !prev)}
+										>
+											{showKeyBuffer ? 'ON' : 'OFF'}
+										</button>
 									</div>
-									<button
-										className={`text-[10px] font-bold px-2 py-1 rounded border transition ${showKeyBuffer ? 'border-[#5b79d6]/50 text-[#9bb2ff] hover:bg-[#5b79d6]/15' : 'border-[#262c3f] text-[#94a0c6] hover:bg-[#1f2536]'}`}
-										onClick={() => setShowKeyBuffer(prev => !prev)}
-									>
-										{showKeyBuffer ? 'ON' : 'OFF'}
-									</button>
+
+										<div className="rounded-xl border border-[#22283a] bg-[#101521]/80 p-3">
+											<div className="flex items-start justify-between gap-3">
+												<div>
+													<div className="text-sm font-bold text-[#cbd3f2]">Workspace wallpaper</div>
+													<div className="text-sm text-[#94a0c6]">
+														Choose a JPG or PNG from `/public`. Labels come directly from each filename.
+													</div>
+												</div>
+												<div className="text-sm text-[#7f8bb4]">
+												{wallpaperLoadStatus === 'loading' && 'Loading…'}
+												{wallpaperLoadStatus === 'ready' && `${wallpaperOptions.length} available`}
+												{wallpaperLoadStatus === 'error' && 'Unavailable'}
+											</div>
+										</div>
+
+										<div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+											<button
+												type="button"
+												className={`rounded-xl border text-left transition ${selectedWallpaperFilename === null ? 'border-[#7aa2f7]/70 bg-[#1a2338]' : 'border-[#22283a] bg-[#121826] hover:border-[#465176]'}`}
+												onClick={() => setSelectedWallpaperFilename(null)}
+												aria-pressed={selectedWallpaperFilename === null}
+											>
+												<div className="flex h-28 items-center justify-center bg-[radial-gradient(circle_at_top,rgba(122,162,247,0.18),rgba(16,21,33,0.96)_70%)]">
+													<div className="rounded-full border border-[#2a3350] px-3 py-1 text-sm font-bold tracking-[0.2em] text-[#9bb2ff]">
+														DEFAULT
+													</div>
+												</div>
+											</button>
+
+											{wallpaperOptions.map(option => {
+												const isSelected = option.filename === selectedWallpaperFilename;
+												return (
+													<button
+														key={option.filename}
+														type="button"
+														className={`group overflow-hidden rounded-xl border text-left transition ${isSelected ? 'border-[#7aa2f7]/70 bg-[#1a2338]' : 'border-[#22283a] bg-[#121826] hover:border-[#465176]'}`}
+														onClick={() => setSelectedWallpaperFilename(option.filename)}
+														aria-pressed={isSelected}
+														data-testid={`wallpaper-option-${option.filename}`}
+													>
+														<div className="relative h-28 overflow-hidden bg-[#0d111b]">
+															<div
+																className="absolute inset-[-10%] bg-cover bg-center transition duration-300 group-hover:scale-105"
+																style={{ backgroundImage: `url("${option.src}")` }}
+															/>
+															<div className="absolute inset-0 bg-gradient-to-t from-[#0b0e17] via-[#0b0e17]/20 to-transparent" />
+															<div className="absolute bottom-2 left-3 right-3 text-sm font-bold text-[#f3f6ff] drop-shadow-[0_0_10px_rgba(0,0,0,0.85)]">
+																{option.name}
+															</div>
+															{isSelected && (
+																<div className="absolute right-2 top-2 rounded-full border border-[#7aa2f7]/60 bg-[#141b29]/85 px-2 py-0.5 text-xs font-bold text-[#9bb2ff]">
+																	Selected
+																</div>
+															)}
+														</div>
+													</button>
+												);
+											})}
+										</div>
+
+										{wallpaperLoadStatus === 'error' && (
+											<div className="mt-3 text-sm text-[#ff9aaa]">
+												Couldn&apos;t load wallpapers from `/public`.
+											</div>
+										)}
+										{wallpaperLoadStatus === 'ready' && wallpaperOptions.length === 0 && (
+											<div className="mt-3 text-sm text-[#94a0c6]">
+												No JPG or PNG wallpapers were found in `/public`.
+											</div>
+										)}
+
+										<div className="mt-4 space-y-2">
+											<div className="flex items-center justify-between text-sm">
+												<span className="font-bold text-[#cbd3f2]">Background opacity</span>
+												<span className="text-[#9bb2ff]">{backgroundOpacity}%</span>
+											</div>
+											<input
+												type="range"
+												min={0}
+												max={100}
+												step={5}
+												value={backgroundOpacity}
+												onChange={(e) => setBackgroundOpacity(normalizeWallpaperOpacity(e.target.value))}
+												disabled={!selectedWallpaperFilename}
+												className="w-full accent-[#7aa2f7] disabled:cursor-not-allowed disabled:opacity-40"
+											/>
+											<div className="text-sm text-[#94a0c6]">
+												{selectedWallpaperFilename
+													? 'Lower values keep the wallpaper subtle behind the workspace.'
+													: 'Select a wallpaper to preview and adjust its opacity.'}
+											</div>
+										</div>
+									</div>
 								</div>
 							</div>
 						</div>
@@ -2941,12 +3162,12 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 				<div className="fixed inset-0 z-50 flex items-center justify-center bg-[#0b0e17]/80" data-testid="topic-switcher">
 					<div className="w-[min(560px,90vw)] rounded-2xl border border-[#22283a] bg-[#141821] shadow-[0_30px_80px_rgba(6,8,14,0.65)]">
 						<div className="flex items-center justify-between border-b border-[#1f2536] bg-[#171c28] px-5 py-4">
-							<div>
-								<div className="text-[11px] font-bold tracking-[0.2em] text-[#cbd3f2]">FOLDERS</div>
-								<div className="text-[10px] text-[#94a0c6]">Choose a note to open</div>
-							</div>
-							<button
-								className="text-[10px] font-bold px-2 py-1 rounded border border-[#5b79d6]/40 text-[#9bb2ff] hover:bg-[#5b79d6]/15 transition"
+								<div>
+									<div className="text-sm font-bold tracking-[0.2em] text-[#cbd3f2]">FOLDERS</div>
+									<div className="text-sm text-[#94a0c6]">Choose a note to open</div>
+								</div>
+								<button
+									className="text-sm font-bold px-2 py-1 rounded border border-[#5b79d6]/40 text-[#9bb2ff] hover:bg-[#5b79d6]/15 transition"
 								data-testid="topic-close"
 								onClick={() => { setIsDocumentSwitcherOpen(false); setTopicMenuEditingTarget(null); }}
 							>
@@ -2954,49 +3175,51 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 							</button>
 						</div>
 						<div className="p-5 space-y-4">
-							<div className="flex items-center justify-between">
-								<div>
-									<div className="text-[10px] font-bold text-[#cbd3f2]">Current note</div>
-									<div className="mt-1 text-[10px] text-[#7aa2f7]">{topic.folder || 'Uncategorized'}</div>
-									<div className="text-[12px] text-[#94a0c6]">{topic.title}</div>
-								</div>
-								<button
-									className="text-[10px] font-bold px-2 py-1 rounded border border-[#7aa2f7]/40 text-[#9bb2ff] hover:bg-[#5b79d6]/15 transition"
+								<div className="flex items-center justify-between">
+									<div>
+										<div className="text-sm font-bold text-[#cbd3f2]">Current note</div>
+										<div className="mt-1 text-sm text-[#7aa2f7]">{topic.folder || 'Uncategorized'}</div>
+										<div className="text-base text-[#94a0c6]">{topic.title}</div>
+									</div>
+									<button
+										className="text-sm font-bold px-2 py-1 rounded border border-[#7aa2f7]/40 text-[#9bb2ff] hover:bg-[#5b79d6]/15 transition"
 									data-testid="topic-create"
 									onClick={createTopic}
 								>
 									NEW NOTE
 								</button>
 							</div>
-							<div className="rounded-lg border border-[#22283a] bg-[#161b27] px-3 py-2 text-[10px] text-[#94a0c6]">
-								{topicMenuEditingTarget ? (
-									<span><span className="font-bold text-[#cbd3f2]">Editing:</span> Esc finish, Enter open</span>
-								) : (
-									<span><span className="font-bold text-[#cbd3f2]">Keys:</span> j/k move, o new, c edit title, f edit folder, Enter/l open, d delete, Esc close</span>
-								)}
-							</div>
+								<div className="rounded-lg border border-[#22283a] bg-[#161b27] px-3 py-2 text-sm text-[#94a0c6]">
+									{topicMenuEditingTarget ? (
+										<span><span className="font-bold text-[#cbd3f2]">Editing:</span> Esc finish, Enter open</span>
+									) : (
+										<span><span className="font-bold text-[#cbd3f2]">Keys:</span> j/k move, o new, c edit title, f edit folder, Enter/l open, dd delete, u undo, Esc close</span>
+									)}
+								</div>
 							<div className="space-y-3" data-testid="topic-list">
 								{orderedFolders.map(folder => (
 									<div key={folder} className="space-y-2">
-										<div className="text-[10px] font-bold tracking-[0.08em] text-[#7aa2f7]">{folder}</div>
-										{groupedTopics[folder].map(item => {
-											const index = topics.findIndex(topicItem => topicItem.id === item.id);
-											return (
-												<div
-													key={item.id}
+											<div className="text-sm font-bold tracking-[0.08em] text-[#7aa2f7]">{folder}</div>
+											{groupedTopics[folder].map(item => {
+												const index = topics.findIndex(topicItem => topicItem.id === item.id);
+												const isEditingTitle = item.id === topicMenuEditingTarget?.id && topicMenuEditingTarget.field === 'title';
+												const isEditingFolder = item.id === topicMenuEditingTarget?.id && topicMenuEditingTarget.field === 'folder';
+												return (
+													<div
+														key={item.id}
 													data-testid={`topic-item-${item.id}`}
 													data-selected={topics[topicMenuIndex]?.id === item.id}
 													className={`flex items-center gap-2 rounded-lg border px-3 py-2 ${item.id === activeTopicId ? 'border-[#7aa2f7]/60 bg-[#1b2131]' : 'border-[#22283a] bg-[#161b27]'} ${topics[topicMenuIndex]?.id === item.id ? 'ring-1 ring-[#ff9e64] shadow-[0_0_10px_rgba(255,158,100,0.3)]' : ''}`}
 												>
-													<div className="w-full space-y-1.5">
-													<input
-														className="flex-1 bg-transparent text-[12px] text-[#c0caf5] outline-none"
-														value={topicDrafts[item.id] ?? item.title}
-														data-testid={`topic-title-input-${item.id}`}
-														autoFocus={item.id === topicMenuEditingTarget?.id && topicMenuEditingTarget.field === 'title'}
-														onChange={(e) => updateTopicMeta(item.id, { title: e.target.value })}
-													onFocus={() => { setTopicMenuEditingTarget({ id: item.id, field: 'title' }); setTopicMenuIndex(index); }}
-													onBlur={() => handleTopicMetaInputBlur(item.id, 'title')}
+														<div className={`w-full ${isEditingFolder ? 'space-y-1.5' : 'space-y-0'}`}>
+														<input
+															className="flex-1 bg-transparent text-base text-[#c0caf5] outline-none"
+															value={topicDrafts[item.id] ?? item.title}
+															data-testid={`topic-title-input-${item.id}`}
+															autoFocus={isEditingTitle}
+															onChange={(e) => updateTopicMeta(item.id, { title: e.target.value })}
+														onFocus={() => { setTopicMenuEditingTarget({ id: item.id, field: 'title' }); setTopicMenuIndex(index); }}
+														onBlur={() => handleTopicMetaInputBlur(item.id, 'title')}
 														onKeyDown={(e) => {
 														if (e.key === 'Escape') {
 															e.preventDefault();
@@ -3008,41 +3231,43 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 															e.preventDefault();
 															openTopic(item.id);
 														}
-													}}
-														placeholder="Untitled Topic"
-													/>
-													<input
-														className="flex-1 bg-transparent text-[11px] text-[#94a0c6] outline-none"
-														value={folderDrafts[item.id] ?? item.folder}
-														data-testid={`topic-folder-input-${item.id}`}
-														autoFocus={item.id === topicMenuEditingTarget?.id && topicMenuEditingTarget.field === 'folder'}
-														onChange={(e) => updateTopicMeta(item.id, { folder: e.target.value })}
-													onFocus={() => { setTopicMenuEditingTarget({ id: item.id, field: 'folder' }); setTopicMenuIndex(index); }}
-													onBlur={() => handleTopicMetaInputBlur(item.id, 'folder')}
-														onKeyDown={(e) => {
-														if (e.key === 'Escape') {
-															e.preventDefault();
-															setTopicMenuEditingTarget(null);
-															(e.currentTarget as HTMLInputElement).blur();
-															return;
-														}
-														if (e.key === 'Enter') {
-															e.preventDefault();
-															openTopic(item.id);
-														}
-													}}
-														placeholder="Folder"
-													/>
-												</div>
-													<button
-														className="text-[10px] font-bold px-2 py-1 rounded border border-[#5b79d6]/40 text-[#9bb2ff] hover:bg-[#5b79d6]/15 transition"
+														}}
+															placeholder="Untitled Topic"
+														/>
+														{isEditingFolder && (
+															<input
+																className="flex-1 bg-transparent text-sm text-[#94a0c6] outline-none"
+																value={folderDrafts[item.id] ?? item.folder}
+																data-testid={`topic-folder-input-${item.id}`}
+																autoFocus={isEditingFolder}
+																onChange={(e) => updateTopicMeta(item.id, { folder: e.target.value })}
+															onFocus={() => { setTopicMenuEditingTarget({ id: item.id, field: 'folder' }); setTopicMenuIndex(index); }}
+															onBlur={() => handleTopicMetaInputBlur(item.id, 'folder')}
+																onKeyDown={(e) => {
+																if (e.key === 'Escape') {
+																	e.preventDefault();
+																	setTopicMenuEditingTarget(null);
+																	(e.currentTarget as HTMLInputElement).blur();
+																	return;
+																}
+																if (e.key === 'Enter') {
+																	e.preventDefault();
+																	openTopic(item.id);
+																}
+															}}
+																placeholder="Folder"
+															/>
+														)}
+													</div>
+														<button
+															className="text-sm font-bold px-2 py-1 rounded border border-[#5b79d6]/40 text-[#9bb2ff] hover:bg-[#5b79d6]/15 transition"
 														data-testid={`topic-open-${item.id}`}
 														onClick={() => openTopic(item.id)}
 													>
 														OPEN
 													</button>
-													<button
-														className="text-[10px] font-bold px-2 py-1 rounded border border-[#f27a93]/40 text-[#ff9aaa] hover:bg-[#f27a93]/15 transition"
+														<button
+															className="text-sm font-bold px-2 py-1 rounded border border-[#f27a93]/40 text-[#ff9aaa] hover:bg-[#f27a93]/15 transition"
 														data-testid={`topic-delete-${item.id}`}
 														onClick={() => deleteTopic(item.id)}
 													>

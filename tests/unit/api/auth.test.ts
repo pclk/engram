@@ -9,8 +9,10 @@ vi.mock('jose', () => ({
   createRemoteJWKSet: createRemoteJWKSetMock
 }));
 
+const cookiesMock = vi.fn();
+
 vi.mock('next/headers', () => ({
-  cookies: vi.fn()
+  cookies: cookiesMock
 }));
 
 const encode = (input: object) => Buffer.from(JSON.stringify(input)).toString('base64url');
@@ -86,6 +88,53 @@ describe('requireAuth token verification', () => {
     if (!result.ok) {
       expect(result.response.status).toBe(401);
       await expect(result.response.json()).resolves.toEqual({ error: 'Session expired.' });
+    }
+  });
+
+
+  it('falls back to cookie token when Authorization header is malformed', async () => {
+    const token = signHsJwt({
+      secret: 'session-secret',
+      sub: '11111111-1111-4111-8111-111111111111',
+      email: 'cookie@example.com',
+      exp: Math.floor(Date.now() / 1000) + 300
+    });
+
+    const { requireAuth, SESSION_COOKIE_NAME } = await import('@/src/server/api/auth');
+    cookiesMock.mockResolvedValue({
+      get: vi.fn((name: string) => (name === SESSION_COOKIE_NAME ? { value: token } : undefined))
+    });
+
+    const result = await requireAuth(
+      new Request('http://localhost/api/content', {
+        headers: { authorization: 'Token malformed' }
+      })
+    );
+
+    expect(result).toEqual({
+      ok: true,
+      auth: {
+        token,
+        userId: '11111111-1111-4111-8111-111111111111',
+        email: 'cookie@example.com'
+      }
+    });
+  });
+
+  it('returns unauthorized when Authorization header is malformed and cookie token is missing', async () => {
+    const { requireAuth } = await import('@/src/server/api/auth');
+    cookiesMock.mockResolvedValue({ get: vi.fn(() => undefined) });
+
+    const result = await requireAuth(
+      new Request('http://localhost/api/content', {
+        headers: { authorization: 'Token malformed' }
+      })
+    );
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.response.status).toBe(401);
+      await expect(result.response.json()).resolves.toEqual({ error: 'Unauthorized.' });
     }
   });
 
