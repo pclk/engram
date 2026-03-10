@@ -9,9 +9,6 @@ const PUBLIC_DIR = path.join(process.cwd(), 'public');
 const hasSignature = (bytes: Uint8Array, signature: number[]) =>
 	signature.every((value, index) => bytes[index] === value);
 
-const isJpegSignature = (bytes: Uint8Array) =>
-	JPEG_SIGNATURE.every((value, index) => bytes[index] === value);
-
 const isSupportedWallpaperFile = async (filename: string) => {
 	const extension = path.extname(filename).toLowerCase();
 	if (extension === '.jpg' || extension === '.jpeg' || extension === '.png') return true;

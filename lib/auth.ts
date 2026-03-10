@@ -195,10 +195,3 @@ export const authClient = {
 		payload.fetchOptions?.throw
 	)
 };
-
-export const neonConfigDiagnostics = {
-	isConfigured: true,
-	missingKeys: [] as string[]
-};
-
-export const getAuthClientOrThrow = () => authClient;

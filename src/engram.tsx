@@ -457,12 +457,6 @@ const findEndWord = (text: string, idx: number) => {
 	return i;
 };
 
-const trimLines = (text: string, maxLines: number) => {
-	const lines = text.split('\n');
-	if (lines.length <= maxLines) return text;
-	return lines.slice(0, maxLines).join('\n') + '…';
-};
-
 const SCROLL_DURATION_MS = 120;
 
 const clampStyle = (shouldClamp: boolean): React.CSSProperties => (
@@ -565,15 +559,6 @@ function useUndo(initialState: HistoryState) {
 
 // --- Components ---
 
-const HintGroup = ({ label, children }: { label: string, children: React.ReactNode }) => (
-		<div className="flex flex-col gap-0.5">
-				<span className="text-[9px] font-bold text-[#565f89] uppercase tracking-wider">{label}</span>
-				<div className="flex gap-2 text-[#c0caf5] text-[10px] font-medium font-mono">
-						{children}
-				</div>
-		</div>
-);
-
 const LegendItem = ({ keys, description }: { keys: string; description: string }) => (
 	<div className="flex items-start gap-2">
 		<span className="shrink-0 rounded border border-[#2a2f45] bg-[#16161e] px-1.5 py-0.5 text-[9px] font-bold text-[#c0caf5]">
@@ -620,14 +605,12 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 		end: number;
 	} | null>(null);
 	const yankFlashTimerRef = useRef<number | null>(null);
-	const [insertDirty, setInsertDirty] = useState(false);
 	const insertDirtyRef = useRef(false);
 	const insertSkipCommitRef = useRef(false);
 	const insertBaseStateRef = useRef<HistoryState | null>(null);
 	const [searchQuery, setSearchQuery] = useState('');
 	const [lastSearchQuery, setLastSearchQuery] = useState('');
 	const [isSearching, setIsSearching] = useState(false);
-	const [ankifyStatus, setAnkifyStatus] = useState<'IDLE' | 'SUCCESS'>('IDLE');
 	const [isAccountOpen, setIsAccountOpen] = useState(false);
 	const [isDocumentSwitcherOpen, setIsDocumentSwitcherOpen] = useState(false);
 	const [wallpaperOptions, setWallpaperOptions] = useState<WallpaperOption[]>([]);
@@ -1490,7 +1473,6 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 		setHState({ ...hState, topic: newTopic });
 		if (mode === 'INSERT') {
 			insertDirtyRef.current = true;
-			setInsertDirty(true);
 		}
 	};
 
@@ -1584,11 +1566,6 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 			return;
 		}
 		pushState(hStateRef.current);
-	};
-
-	const handleAnkify = () => {
-		setAnkifyStatus('SUCCESS');
-		setTimeout(() => setAnkifyStatus('IDLE'), 1500);
 	};
 
 	const performDelete = (targetIdx: number) => {
@@ -1844,7 +1821,6 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 					if (insertDirtyRef.current && !insertSkipCommitRef.current) commitToHistory();
 					insertSkipCommitRef.current = false;
 					insertDirtyRef.current = false;
-					setInsertDirty(false);
 					insertBaseStateRef.current = null;
 					setCursor(Math.max(0, normalCursorRef.current));
 				}
@@ -1999,7 +1975,7 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 					return;
 				}
 				if (keyBuffer === ' ') {
-					if (e.key === 'f') { setKeyBuffer(''); handleAnkify(); return; }
+					if (e.key === 'f') { setKeyBuffer(''); return; }
 					if (e.key === 'a') { setKeyBuffer(''); setTopicMenuEditingTarget(null); setIsDocumentSwitcherOpen(true); return; }
 					if (e.key === 'c') { setKeyBuffer(''); handleCopyMarkdown(); return; }
 					setKeyBuffer('');
@@ -2644,7 +2620,6 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 				insertBaseStateRef.current = hStateRef.current;
 			}
 			insertDirtyRef.current = false;
-			setInsertDirty(false);
 		}
 	}, [mode]);
 
