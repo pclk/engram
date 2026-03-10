@@ -69,6 +69,25 @@ type TopicMenuSnapshot = {
   selectedNodeId: string | null;
   topicMenuIndex: number;
 };
+type LegendEntry = {
+  keys: string;
+  description: string;
+};
+type LiveKeyIndicator = {
+  id: number;
+  label: string;
+  title: string;
+  description: string;
+  hints?: LegendEntry[];
+  tone?: "blue" | "emerald" | "amber" | "rose";
+  sticky?: boolean;
+};
+type PressedModifiers = {
+  alt: boolean;
+  ctrl: boolean;
+  shift: boolean;
+  meta: boolean;
+};
 
 const NORMAL_FAST_RENDER_LIMIT = 2000;
 
@@ -86,6 +105,121 @@ const LOCAL_ACTIVE_TOPIC_KEY = "engram.activeTopicId.v1";
 const WALLPAPER_FILENAME_KEY = "engram.wallpaper.filename.v1";
 const WALLPAPER_OPACITY_KEY = "engram.wallpaper.opacity.v1";
 const SHOW_KEY_BUFFER_KEY = "engram.showKeyBuffer";
+const EMPTY_MODIFIERS: PressedModifiers = {
+  alt: false,
+  ctrl: false,
+  shift: false,
+  meta: false,
+};
+
+const formatKeyboardKey = (key: string) => {
+  if (key === " ") return "Space";
+  if (key === "Escape") return "Esc";
+  if (key === "Control") return "Ctrl";
+  if (key === "Alt") return "Alt";
+  if (key === "Shift") return "Shift";
+  if (key === "Meta") return "Meta";
+  return key;
+};
+
+const getToneClasses = (
+  tone: LiveKeyIndicator["tone"] = "blue",
+): {
+  badge: string;
+  title: string;
+  border: string;
+} => {
+  switch (tone) {
+    case "emerald":
+      return {
+        badge: "border-[#4fd6a2]/50 bg-[#10251d] text-[#73daca]",
+        title: "text-[#73daca]",
+        border: "border-[#214638]",
+      };
+    case "amber":
+      return {
+        badge: "border-[#ffb86c]/50 bg-[#2b1c12] text-[#ffb86c]",
+        title: "text-[#ffb86c]",
+        border: "border-[#4d3320]",
+      };
+    case "rose":
+      return {
+        badge: "border-[#f7768e]/50 bg-[#2d1620] text-[#f7768e]",
+        title: "text-[#f7768e]",
+        border: "border-[#4b2431]",
+      };
+    default:
+      return {
+        badge: "border-[#7aa2f7]/50 bg-[#172032] text-[#7aa2f7]",
+        title: "text-[#7aa2f7]",
+        border: "border-[#25314b]",
+      };
+  }
+};
+
+const getInteractionDecor = (
+  tone: LiveKeyIndicator["tone"] | null,
+): {
+  context: string;
+  focus: string;
+  text: string;
+  cursor: string;
+  chip: string;
+  index: string;
+} | null => {
+  switch (tone) {
+    case "rose":
+      return {
+        context:
+          "border-[#f7768e]/45 shadow-[0_0_26px_rgba(247,118,142,0.16)] before:absolute before:inset-0 before:rounded-[inherit] before:bg-[radial-gradient(circle_at_top_right,rgba(247,118,142,0.14),transparent_62%)] before:pointer-events-none",
+        focus:
+          "border-[#f7768e]/55 shadow-[0_0_32px_rgba(247,118,142,0.22)] before:absolute before:inset-0 before:rounded-[inherit] before:bg-[linear-gradient(135deg,rgba(247,118,142,0.14),transparent_58%)] before:pointer-events-none",
+        text: "rounded-md bg-[linear-gradient(90deg,rgba(247,118,142,0.12),transparent_74%)] px-2 py-1 -mx-2",
+        cursor:
+          "bg-[#f7768e] text-[#1a1b26] shadow-[0_0_18px_rgba(247,118,142,0.35)] rounded-sm",
+        chip: "border-[#f7768e]/60 bg-[#301923]/90 text-[#f7768e]",
+        index: "text-[#f7768e] drop-shadow-[0_0_10px_rgba(247,118,142,0.35)]",
+      };
+    case "amber":
+      return {
+        context:
+          "border-[#ffb86c]/45 shadow-[0_0_26px_rgba(255,184,108,0.16)] before:absolute before:inset-0 before:rounded-[inherit] before:bg-[radial-gradient(circle_at_top_right,rgba(255,184,108,0.16),transparent_62%)] before:pointer-events-none",
+        focus:
+          "border-[#ffb86c]/55 shadow-[0_0_32px_rgba(255,184,108,0.22)] before:absolute before:inset-0 before:rounded-[inherit] before:bg-[linear-gradient(135deg,rgba(255,184,108,0.16),transparent_58%)] before:pointer-events-none",
+        text: "rounded-md bg-[linear-gradient(90deg,rgba(255,184,108,0.14),transparent_74%)] px-2 py-1 -mx-2",
+        cursor:
+          "bg-[#ffb86c] text-[#1a1b26] shadow-[0_0_18px_rgba(255,184,108,0.34)] rounded-sm",
+        chip: "border-[#ffb86c]/60 bg-[#2f2115]/90 text-[#ffb86c]",
+        index: "text-[#ffb86c] drop-shadow-[0_0_10px_rgba(255,184,108,0.32)]",
+      };
+    case "emerald":
+      return {
+        context:
+          "border-[#73daca]/45 shadow-[0_0_26px_rgba(115,218,202,0.16)] before:absolute before:inset-0 before:rounded-[inherit] before:bg-[radial-gradient(circle_at_top_right,rgba(115,218,202,0.14),transparent_62%)] before:pointer-events-none",
+        focus:
+          "border-[#73daca]/55 shadow-[0_0_32px_rgba(115,218,202,0.22)] before:absolute before:inset-0 before:rounded-[inherit] before:bg-[linear-gradient(135deg,rgba(115,218,202,0.14),transparent_58%)] before:pointer-events-none",
+        text: "rounded-md bg-[linear-gradient(90deg,rgba(115,218,202,0.12),transparent_74%)] px-2 py-1 -mx-2",
+        cursor:
+          "bg-[#73daca] text-[#0f1720] shadow-[0_0_18px_rgba(115,218,202,0.34)] rounded-sm",
+        chip: "border-[#73daca]/60 bg-[#132821]/90 text-[#73daca]",
+        index: "text-[#73daca] drop-shadow-[0_0_10px_rgba(115,218,202,0.32)]",
+      };
+    case "blue":
+      return {
+        context:
+          "border-[#7aa2f7]/45 shadow-[0_0_26px_rgba(122,162,247,0.16)] before:absolute before:inset-0 before:rounded-[inherit] before:bg-[radial-gradient(circle_at_top_right,rgba(122,162,247,0.14),transparent_62%)] before:pointer-events-none",
+        focus:
+          "border-[#7aa2f7]/55 shadow-[0_0_32px_rgba(122,162,247,0.22)] before:absolute before:inset-0 before:rounded-[inherit] before:bg-[linear-gradient(135deg,rgba(122,162,247,0.14),transparent_58%)] before:pointer-events-none",
+        text: "rounded-md bg-[linear-gradient(90deg,rgba(122,162,247,0.12),transparent_74%)] px-2 py-1 -mx-2",
+        cursor:
+          "bg-[#7aa2f7] text-[#1a1b26] shadow-[0_0_18px_rgba(122,162,247,0.34)] rounded-sm",
+        chip: "border-[#7aa2f7]/60 bg-[#182235]/90 text-[#7aa2f7]",
+        index: "text-[#7aa2f7] drop-shadow-[0_0_10px_rgba(122,162,247,0.32)]",
+      };
+    default:
+      return null;
+  }
+};
 
 const generateId = () => {
   const webCrypto =
@@ -752,6 +886,11 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
     DEFAULT_WALLPAPER_OPACITY,
   );
   const [showKeyBuffer, setShowKeyBuffer] = useState(true);
+  const [liveKeyIndicator, setLiveKeyIndicator] =
+    useState<LiveKeyIndicator | null>(null);
+  const liveKeyIndicatorTimerRef = useRef<number | null>(null);
+  const [pressedModifiers, setPressedModifiers] =
+    useState<PressedModifiers>(EMPTY_MODIFIERS);
   const [hasLoadedClientPrefs, setHasLoadedClientPrefs] = useState(false);
   const [sessionData, setSessionData] = useState<any>(null);
   const [authSyncError, setAuthSyncError] = useState<string | null>(null);
@@ -869,6 +1008,93 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
     .map(({ node }) => node.id)
     .join("|");
   const moveableFolders = folderNodes.filter((node) => !node.isRoot);
+  const activeModifierLabels = [
+    pressedModifiers.alt ? "Alt" : null,
+    pressedModifiers.ctrl ? "Ctrl" : null,
+    pressedModifiers.shift ? "Shift" : null,
+    pressedModifiers.meta ? "Meta" : null,
+  ].filter((label): label is string => Boolean(label));
+  const activeInteractionTone: LiveKeyIndicator["tone"] | null =
+    liveKeyIndicator?.tone ??
+    (pressedModifiers.alt
+      ? "amber"
+      : pressedModifiers.ctrl || pressedModifiers.meta
+        ? "blue"
+        : pressedModifiers.shift
+          ? "emerald"
+          : null);
+  const activeInteractionDecor = getInteractionDecor(activeInteractionTone);
+  const activeInteractionLabel =
+    liveKeyIndicator?.label ??
+    (activeModifierLabels.length > 0 ? activeModifierLabels.join("+") : null);
+
+  const clearLiveKeyIndicator = useCallback(() => {
+    if (liveKeyIndicatorTimerRef.current !== null) {
+      window.clearTimeout(liveKeyIndicatorTimerRef.current);
+      liveKeyIndicatorTimerRef.current = null;
+    }
+    setLiveKeyIndicator(null);
+  }, []);
+
+  const showLiveKeyHint = useCallback(
+    (indicator: Omit<LiveKeyIndicator, "id">) => {
+      if (liveKeyIndicatorTimerRef.current !== null) {
+        window.clearTimeout(liveKeyIndicatorTimerRef.current);
+        liveKeyIndicatorTimerRef.current = null;
+      }
+      const nextIndicator = { ...indicator, id: Date.now() + Math.random() };
+      setLiveKeyIndicator(nextIndicator);
+    },
+    [],
+  );
+
+  const syncPressedModifiers = useCallback(
+    (event: KeyboardEvent, isKeyDown: boolean) => {
+      setPressedModifiers({
+        alt: event.key === "Alt" ? isKeyDown : event.altKey,
+        ctrl: event.key === "Control" ? isKeyDown : event.ctrlKey,
+        shift: event.key === "Shift" ? isKeyDown : event.shiftKey,
+        meta: event.key === "Meta" ? isKeyDown : event.metaKey,
+      });
+    },
+    [],
+  );
+
+  const showAltModeHint = useCallback(() => {
+    if (mode === "INSERT") {
+      showLiveKeyHint({
+        label: "Alt",
+        title: "Fast exit modifier",
+        description: "Leave Insert without stepping through Normal first.",
+        hints: [
+          { keys: "Alt+Esc", description: "Jump straight back to Block mode" },
+          { keys: "Alt+[", description: "Return to Block mode" },
+          { keys: "Ctrl+[", description: "Return to Block mode" },
+        ],
+        tone: "amber",
+        sticky: true,
+      });
+      return;
+    }
+
+    const insertHints: LegendEntry[] = [
+      { keys: "Alt+i", description: "Enter Insert at the current start point" },
+      { keys: "Alt+a", description: "Enter Insert just after the cursor" },
+      { keys: "Alt+Shift+A", description: "Enter Insert at the end" },
+    ];
+
+    showLiveKeyHint({
+      label: "Alt",
+      title: mode === "BLOCK" ? "Insert shortcut ready" : "Insert jump ready",
+      description:
+        mode === "BLOCK"
+          ? "Skip Normal mode and open Insert immediately."
+          : "Jump into Insert without using the plain Normal-mode motions.",
+      hints: insertHints,
+      tone: "amber",
+      sticky: true,
+    });
+  }, [mode, showLiveKeyHint]);
 
   const formatPersistError = useCallback((error: unknown) => {
     if (!error) return "Unknown persistence error.";
@@ -2096,6 +2322,43 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      const hasPendingNormalChord =
+        keyBuffer !== "" ||
+        normalYankPendingRef.current ||
+        normalDeletePendingRef.current ||
+        normalChangePendingRef.current;
+      const hasPendingBlockChord =
+        keyBuffer !== "" || blockChordRef.current.key !== null;
+      const isModifierOnlyKey =
+        e.key === "Alt" ||
+        e.key === "Control" ||
+        e.key === "Shift" ||
+        e.key === "Meta";
+      const shouldInterruptWithAlt =
+        e.key === "Alt" &&
+        ((mode === "NORMAL" && hasPendingNormalChord) ||
+          (mode === "BLOCK" && hasPendingBlockChord));
+      if (!isModifierOnlyKey || shouldInterruptWithAlt) clearLiveKeyIndicator();
+      syncPressedModifiers(e, true);
+      if (e.key === "Alt" && mode === "NORMAL" && hasPendingNormalChord) {
+        setKeyBuffer("");
+        normalYankPendingRef.current = false;
+        setNormalYankPending(false);
+        normalDeletePendingRef.current = false;
+        setNormalDeletePending(false);
+        normalChangePendingRef.current = false;
+        setNormalChangePending(false);
+      }
+      if (e.key === "Alt" && mode === "BLOCK" && hasPendingBlockChord) {
+        setKeyBuffer("");
+        blockChordRef.current = { key: null, at: 0 };
+      }
+      if (
+        e.key === "Alt" &&
+        (mode === "BLOCK" || mode === "NORMAL" || mode === "INSERT")
+      ) {
+        showAltModeHint();
+      }
       if (e.ctrlKey && (e.key === "r" || e.key === "R")) return;
       const target = e.target as HTMLElement | null;
       const isTopicMenuNameInput =
@@ -2505,6 +2768,12 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
           return;
         }
         if (e.key === " ") {
+          showLiveKeyHint({
+            label: "Space",
+            title: "Leader chord armed",
+            description: "Choose a workspace action from the legend below.",
+            tone: "blue",
+          });
           setKeyBuffer(" ");
           return;
         }
@@ -2522,10 +2791,6 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
           return;
         }
         if (keyBuffer === " ") {
-          if (e.key === "f") {
-            setKeyBuffer("");
-            return;
-          }
           if (e.key === "a") {
             setKeyBuffer("");
             setTopicMenuEditingTarget(null);
@@ -2555,12 +2820,24 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
           return;
         }
         if (e.key === "d") {
+          showLiveKeyHint({
+            label: "d",
+            title: "Delete chord armed",
+            description: "Choose a motion below.",
+            tone: "rose",
+          });
           normalDeletePendingRef.current = true;
           setNormalDeletePending(true);
           setKeyBuffer("d");
           return;
         }
         if (e.key === "c") {
+          showLiveKeyHint({
+            label: "c",
+            title: "Change chord armed",
+            description: "Choose a motion below.",
+            tone: "amber",
+          });
           normalChangePendingRef.current = true;
           setNormalChangePending(true);
           setKeyBuffer("c");
@@ -2690,6 +2967,12 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
           return;
         }
         if (!keyBuffer && e.key === " ") {
+          showLiveKeyHint({
+            label: "Space",
+            title: "Leader chord armed",
+            description: "Choose a workspace action from the legend below.",
+            tone: "blue",
+          });
           blockChordRef.current = { key: "space", at: Date.now() };
           setKeyBuffer(" ");
           return;
@@ -3062,7 +3345,15 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
             });
             updateTopic(newTopic, cursorIdx + 1, -1);
             setMode("INSERT");
-          } else setKeyBuffer("o");
+          } else {
+            showLiveKeyHint({
+              label: "o",
+              title: "Add derivative chord armed",
+              description: "Choose which derivative type to create.",
+              tone: "blue",
+            });
+            setKeyBuffer("o");
+          }
         }
         if (e.key === "O") {
           if (derivIdx === -1) {
@@ -3077,15 +3368,46 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
             setMode("INSERT");
           }
         }
-        if (e.key === "d") setKeyBuffer("d");
-        if (e.key === "c") setKeyBuffer("c");
+        if (e.key === "d") {
+          showLiveKeyHint({
+            label: "d",
+            title: "Delete chord armed",
+            description: "Choose what to delete from this concept.",
+            tone: "rose",
+          });
+          setKeyBuffer("d");
+        }
+        if (e.key === "c") {
+          showLiveKeyHint({
+            label: "c",
+            title: "Change chord armed",
+            description: "Choose what to rewrite from this concept.",
+            tone: "amber",
+          });
+          setKeyBuffer("c");
+        }
         if (e.key === "u") undo();
         if (e.key === "r") redo();
       }
     };
 
+    const handleKeyUp = (e: KeyboardEvent) => {
+      syncPressedModifiers(e, false);
+      if (e.key === "Alt" || e.key === "Control" || e.key === "Shift") {
+        setLiveKeyIndicator((current) =>
+          current?.sticky && current.label === formatKeyboardKey(e.key)
+            ? null
+            : current,
+        );
+      }
+    };
+
     window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
+    window.addEventListener("keyup", handleKeyUp);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+      window.removeEventListener("keyup", handleKeyUp);
+    };
   });
 
   useLayoutEffect(() => {
@@ -3530,6 +3852,8 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
     normalYankPendingRef.current = normalYankPending;
   }, [normalYankPending]);
 
+  useEffect(() => () => clearLiveKeyIndicator(), [clearLiveKeyIndicator]);
+
   useEffect(() => {
     if (!hasLoadedClientPrefs) return;
     try {
@@ -3647,6 +3971,13 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
     isFocused: boolean,
     block: { cursorIdx: number; derivIdx: number },
   ) => {
+    const hasInteractionAccent =
+      !!activeInteractionDecor &&
+      cursorIdx === block.cursorIdx &&
+      derivIdx === block.derivIdx;
+    const cursorAccentClass = hasInteractionAccent
+      ? activeInteractionDecor.cursor
+      : "";
     const sQuery = isSearching ? searchQuery : lastSearchQuery;
     const hasSearch = !!sQuery;
     const isVisualText =
@@ -3709,7 +4040,12 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
     }
 
     if (mode === "NORMAL" && isFocused) {
-      if (!text) return <span className="char-cursor">&nbsp;</span>;
+      if (!text)
+        return (
+          <span className={`char-cursor ${cursorAccentClass}`.trim()}>
+            &nbsp;
+          </span>
+        );
 
       const shouldFastRender =
         text.length > NORMAL_FAST_RENDER_LIMIT &&
@@ -3727,14 +4063,18 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
           <span>
             {before}
             {cursor === text.length ? (
-              <span className="char-cursor">&nbsp;</span>
+              <span className={`char-cursor ${cursorAccentClass}`.trim()}>
+                &nbsp;
+              </span>
             ) : cursorChar === "\n" ? (
               <span>
-                <span className="char-cursor">&nbsp;</span>
+                <span className={`char-cursor ${cursorAccentClass}`.trim()}>
+                  &nbsp;
+                </span>
                 {cursorChar}
               </span>
             ) : (
-              <span className="char-cursor">
+              <span className={`char-cursor ${cursorAccentClass}`.trim()}>
                 {cursorChar === " " ? "\u00A0" : cursorChar}
               </span>
             )}
@@ -3742,7 +4082,9 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
             {text.endsWith("\n") && (
               <span className="block">
                 {cursor === text.length ? (
-                  <span className="char-cursor">&nbsp;</span>
+                  <span className={`char-cursor ${cursorAccentClass}`.trim()}>
+                    &nbsp;
+                  </span>
                 ) : (
                   <span>&nbsp;</span>
                 )}
@@ -3780,12 +4122,15 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
             if (isMatch) className += matchClass + " ";
             if (isSelected) className += "bg-[#bb9af7] text-[#1a1b26] ";
             if (isFlash) className += "bg-[#7aa2f7] text-[#1a1b26] ";
-            if (i === normalCursor) className += "char-cursor ";
+            if (i === normalCursor)
+              className += `char-cursor ${cursorAccentClass} `;
 
             if (char === "\n" && i === normalCursor) {
               return (
                 <span key={i}>
-                  <span className="char-cursor">&nbsp;</span>
+                  <span className={`char-cursor ${cursorAccentClass}`.trim()}>
+                    &nbsp;
+                  </span>
                   {char}
                 </span>
               );
@@ -3798,12 +4143,16 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
             );
           })}
           {normalCursor === text.length && !text.endsWith("\n") && (
-            <span className="char-cursor">&nbsp;</span>
+            <span className={`char-cursor ${cursorAccentClass}`.trim()}>
+              &nbsp;
+            </span>
           )}
           {text.endsWith("\n") && (
             <span className="block">
               {normalCursor === text.length ? (
-                <span className="char-cursor">&nbsp;</span>
+                <span className={`char-cursor ${cursorAccentClass}`.trim()}>
+                  &nbsp;
+                </span>
               ) : (
                 <span>&nbsp;</span>
               )}
@@ -3841,7 +4190,11 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
     }
 
     if (mode === "NORMAL" && isFocused && !text) {
-      return <span className="char-cursor">&nbsp;</span>;
+      return (
+        <span className={`char-cursor ${cursorAccentClass}`.trim()}>
+          &nbsp;
+        </span>
+      );
     }
     return (
       <span className={!text ? "opacity-30 italic" : ""}>
@@ -3889,6 +4242,67 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
     return targetIndex >= start && targetIndex <= end;
   };
 
+  const renderLiveKeyIndicator = () => {
+    if (!liveKeyIndicator && activeModifierLabels.length === 0) return null;
+    const toneClasses = getToneClasses(liveKeyIndicator?.tone);
+
+    return (
+      <div
+        className={`mb-3 flex flex-col gap-2 rounded-lg border bg-[#111723]/70 p-3 ${toneClasses.border}`}
+      >
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-[9px] font-bold uppercase tracking-[0.24em] text-[#7aa2f7]">
+            Live Keys
+          </span>
+          {activeModifierLabels.length > 0 && (
+            <div className="flex flex-wrap justify-end gap-1">
+              {activeModifierLabels.map((label) => (
+                <span
+                  key={label}
+                  className="rounded border border-[#3b4261] bg-[#161c29] px-1.5 py-0.5 text-[9px] font-bold text-[#c0caf5]"
+                >
+                  {label}
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
+        {liveKeyIndicator && (
+          <>
+            <div className="flex items-start gap-3">
+              <span
+                className={`shrink-0 rounded-md border px-2 py-1 text-[11px] font-black tracking-[0.18em] uppercase shadow-[0_0_16px_rgba(10,12,20,0.55)] ${toneClasses.badge}`}
+              >
+                {liveKeyIndicator.label}
+              </span>
+              <div className="space-y-1">
+                <div
+                  className={`text-[11px] font-semibold ${toneClasses.title}`}
+                >
+                  {liveKeyIndicator.title}
+                </div>
+                <div className="text-[10px] leading-relaxed text-[#a9b1d6]">
+                  {liveKeyIndicator.description}
+                </div>
+              </div>
+            </div>
+            {liveKeyIndicator.hints && liveKeyIndicator.hints.length > 0 && (
+              <div className="mt-1 flex flex-col gap-2">
+                {liveKeyIndicator.hints.map((hint) => (
+                  <LegendItem
+                    key={`${liveKeyIndicator.label}-${hint.keys}`}
+                    keys={hint.keys}
+                    description={hint.description}
+                  />
+                ))}
+              </div>
+            )}
+          </>
+        )}
+      </div>
+    );
+  };
+
   const renderOptions = () => {
     if (visualAnchor) {
       return (
@@ -3905,10 +4319,6 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
     if (keyBuffer === " ") {
       return (
         <div className="flex flex-col gap-2">
-          <LegendItem
-            keys="Space + f"
-            description="Convert all clozes into Anki cards"
-          />
           <LegendItem keys="Space + a" description="Open Folders" />
           <LegendItem keys="Space + c" description="Copy topic as Markdown" />
           <LegendItem keys="Esc" description="Cancel leader chord" />
@@ -4036,6 +4446,7 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
             <LegendItem keys="d d" description="Delete the focused item" />
             <LegendItem keys="d p" description="Delete a probing question" />
             <LegendItem keys="d c" description="Delete a cloze deletion" />
+            <LegendItem keys="d e" description="Delete an elaboration" />
             <LegendItem keys="Esc" description="Cancel delete chord" />
           </div>
         );
@@ -4045,6 +4456,7 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
             <LegendItem keys="c c" description="Change the focused item" />
             <LegendItem keys="c p" description="Change a probing question" />
             <LegendItem keys="c l" description="Change a cloze deletion" />
+            <LegendItem keys="c e" description="Change an elaboration" />
             <LegendItem keys="Esc" description="Cancel change chord" />
           </div>
         );
@@ -4193,6 +4605,7 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
       {showKeyBuffer && (
         <div className="fixed right-6 top-24 z-20 max-w-[280px]">
           <div className="rounded-xl border border-[#2b324a] bg-[#151a26]/90 px-3 py-2 shadow-[0_0_18px_rgba(10,12,20,0.85)] backdrop-blur">
+            {renderLiveKeyIndicator()}
             {renderOptions()}
           </div>
         </div>
@@ -4206,11 +4619,32 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
         <div className="max-w-3xl mx-auto pb-20 space-y-6">
           {topic.concepts.map((concept, cIdx) => {
             const isConceptActive = cursorIdx === cIdx && derivIdx === -1;
+            const isConceptContextActive = cursorIdx === cIdx;
+            const hasSelectedDerivativeInConcept = concept.derivatives.some(
+              (_, dIdx) => isBlockSelected(cIdx, dIdx),
+            );
+            const shouldDimConceptGroup =
+              mode === "BLOCK" &&
+              visualAnchor?.kind === "block" &&
+              !isBlockSelected(cIdx, -1) &&
+              !hasSelectedDerivativeInConcept;
             const conceptOpacity =
-              isFocusMode && !isConceptActive
+              (isFocusMode && !isConceptActive) || shouldDimConceptGroup
                 ? "opacity-20 grayscale transition-all duration-300"
                 : "opacity-100 transition-all duration-300";
             const isConceptSelected = isBlockSelected(cIdx, -1);
+            const conceptContextAccent =
+              isConceptContextActive && activeInteractionDecor
+                ? activeInteractionDecor.context
+                : "";
+            const conceptFocusAccent =
+              isConceptActive && activeInteractionDecor
+                ? activeInteractionDecor.focus
+                : "";
+            const conceptTextAccent =
+              isConceptActive && activeInteractionDecor
+                ? activeInteractionDecor.text
+                : "";
             const shouldRenderConceptMarkdown =
               mode === "BLOCK" && !!concept.text;
             const shouldClampConcept = mode === "BLOCK" && cursorIdx !== cIdx;
@@ -4230,10 +4664,25 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
                            : "border-[#7aa2f7]/20"
                        }
 										 ${isConceptSelected ? "ring-2 ring-[#bb9af7] bg-[#2a1f3d]/40 border-[#bb9af7]/40" : ""}
+                     ${conceptContextAccent}
+                     ${conceptFocusAccent}
 										 `}
               >
+                {isConceptActive &&
+                  activeInteractionDecor &&
+                  activeInteractionLabel && (
+                    <div className="pointer-events-none absolute right-3 top-3 z-10">
+                      <span
+                        className={`rounded-full border px-2 py-0.5 text-[9px] font-black uppercase tracking-[0.18em] shadow-[0_0_12px_rgba(10,12,20,0.5)] ${activeInteractionDecor.chip}`}
+                      >
+                        {activeInteractionLabel}
+                      </span>
+                    </div>
+                  )}
                 <div className={`flex gap-4 ${conceptOpacity}`}>
-                  <span className="mono text-xs opacity-50 mt-1.5 text-[#565f89]">
+                  <span
+                    className={`mono mt-1.5 text-xs opacity-50 text-[#565f89] ${isConceptContextActive && activeInteractionDecor ? activeInteractionDecor.index : ""}`}
+                  >
                     {String(cIdx + 1).padStart(2, "0")}
                   </span>
                   <div className="flex-1 text-lg leading-relaxed relative font-mono">
@@ -4255,7 +4704,7 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
                         />
                       )}
                     <div
-                      className={`break-words min-h-[1.5em] text-[#c0caf5] ${shouldRenderConceptMarkdown ? "engram-markdown whitespace-normal" : "whitespace-pre-wrap"}`}
+                      className={`break-words min-h-[1.5em] text-[#c0caf5] ${shouldRenderConceptMarkdown ? "engram-markdown whitespace-normal" : "whitespace-pre-wrap"} ${conceptTextAccent}`}
                       style={{
                         overflowWrap: "anywhere",
                         wordBreak: "break-word",
@@ -4304,10 +4753,18 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
                     const isDerivActive =
                       cursorIdx === cIdx && derivIdx === dIdx;
                     const derivOpacity =
-                      isFocusMode && !isDerivActive
+                      (isFocusMode && !isDerivActive) || shouldDimConceptGroup
                         ? "opacity-20 grayscale transition-all duration-300"
                         : "opacity-100 transition-all duration-300";
                     const isDerivSelected = isBlockSelected(cIdx, dIdx);
+                    const derivativeFocusAccent =
+                      isDerivActive && activeInteractionDecor
+                        ? activeInteractionDecor.focus
+                        : "";
+                    const derivativeTextAccent =
+                      isDerivActive && activeInteractionDecor
+                        ? activeInteractionDecor.text
+                        : "";
                     const shouldRenderDerivMarkdown =
                       mode === "BLOCK" && !!deriv.text;
                     const shouldClampDeriv =
@@ -4351,8 +4808,20 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
                         className={`p-3 rounded relative transition-all duration-100 border ${borderColor} ${bgColor} ${derivOpacity}
 																${cursorIdx === cIdx && derivIdx === dIdx && mode === "BLOCK" ? `ring-1 ${focusRing} shadow-[0_0_15px_rgba(0,0,0,0.3)]` : ""}
 														${isDerivSelected ? "ring-2 ring-[#bb9af7] border-[#bb9af7]/50 bg-[#2a1f3d]/35" : ""}
+                            ${derivativeFocusAccent}
 														`}
                       >
+                        {isDerivActive &&
+                          activeInteractionDecor &&
+                          activeInteractionLabel && (
+                            <div className="pointer-events-none absolute right-3 top-3 z-10">
+                              <span
+                                className={`rounded-full border px-2 py-0.5 text-[9px] font-black uppercase tracking-[0.18em] shadow-[0_0_12px_rgba(10,12,20,0.5)] ${activeInteractionDecor.chip}`}
+                              >
+                                {activeInteractionLabel}
+                              </span>
+                            </div>
+                          )}
                         <div className="flex items-start gap-3">
                           <span
                             className={`text-[9px] px-1.5 py-0.5 rounded uppercase font-bold tracking-wider mt-0.5 ${badgeBg} ${badgeText}`}
@@ -4383,7 +4852,7 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
                                 />
                               )}
                             <div
-                              className={`break-words min-h-[1.5em] text-[#a9b1d6] ${shouldRenderDerivMarkdown ? "engram-markdown whitespace-normal" : "whitespace-pre-wrap"}`}
+                              className={`break-words min-h-[1.5em] text-[#a9b1d6] ${shouldRenderDerivMarkdown ? "engram-markdown whitespace-normal" : "whitespace-pre-wrap"} ${derivativeTextAccent}`}
                               style={{
                                 overflowWrap: "anywhere",
                                 wordBreak: "break-word",
@@ -4431,14 +4900,6 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
           })}
         </div>
       </div>
-
-      {showKeyBuffer && keyBuffer && (
-        <div style={{ position: "fixed", right: 24, top: 168, zIndex: 40 }}>
-          <div className="px-3 py-2 rounded-lg border border-[#2a2f45] bg-[#1f2335]/90 text-[10px] font-bold tracking-wider text-[#c0caf5] shadow-[0_0_18px_rgba(26,27,38,0.95)]">
-            CHORD: {keyBuffer}
-          </div>
-        </div>
-      )}
 
       {isSearching && (
         <div className="absolute bottom-10 left-0 right-0 p-4 bg-[#16161e] border-t border-b border-[#7aa2f7] z-50 flex items-center gap-2 shadow-2xl">
