@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { getDb } from '@/lib/db';
-import { requireAuth, getCurrentSession, serializeSession, serializeUser } from '@/src/server/api/auth';
+import { getSessionFromRequest, requireAuth, serializeSession, serializeUser } from '@/src/server/api/auth';
 import { errorResponse, parseJson } from '@/src/server/api/http';
 
 const updateAccountSchema = z.object({
@@ -33,7 +33,7 @@ export async function PATCH(request: Request) {
     }
   });
 
-  const session = await getCurrentSession();
+  const session = await getSessionFromRequest(request);
 
   return Response.json({
     data: {
