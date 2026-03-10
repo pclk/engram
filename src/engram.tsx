@@ -14,10 +14,23 @@ import {
 import {
 	deleteContentResponseSchema,
 	listContentResponseSchema,
+	contentNodeSchema,
 	contentUpsertRequestSchema,
 	upsertContentResponseSchema,
-	toTopicContent
+	toTopicDocument
 } from '@/lib/schemas/content';
+import {
+	getAncestorIds,
+	getAvailableSiblingName,
+	getNodePath,
+	getParentPath,
+	getSubtreeNodeIds,
+	listChildNodes,
+	sanitizeNodeName,
+	sortNodesForDisplay,
+	splitLegacyFolderPath
+} from '@/lib/filesystem';
+import type { ContentNode } from '@/lib/schemas/filesystem';
 import type { Concept, Derivative, DerivativeType, TopicContent as Topic } from '@/lib/schemas/topic';
 import {
 	DEFAULT_WALLPAPER_OPACITY,
@@ -32,11 +45,18 @@ type Mode = 'BLOCK' | 'NORMAL' | 'INSERT';
 type YankedItem =
 	| { kind: 'concept'; concept: Concept }
 	| { kind: 'derivative'; derivative: Derivative };
+type FileNode = Extract<ContentNode, { type: 'file' }>;
+type FolderNode = Extract<ContentNode, { type: 'folder' }>;
+type FileSystemState = {
+	rootId: string;
+	nodesById: Record<string, ContentNode>;
+};
 type TopicMenuSnapshot = {
-	topics: Topic[];
+	fileSystem: FileSystemState;
 	activeTopicId: string;
-	topicDrafts: Record<string, string>;
-	folderDrafts: Record<string, string>;
+	nodeDrafts: Record<string, string>;
+	currentFolderId: string;
+	selectedNodeId: string | null;
 	topicMenuIndex: number;
 };
 
@@ -50,10 +70,12 @@ interface HistoryState {
 }
 
 const isE2E = process.env.NEXT_PUBLIC_E2E === 'true';
+const LOCAL_FILESYSTEM_KEY = 'engram.filesystem.v1';
 const LOCAL_TOPICS_KEY = 'engram.topics.v1';
 const LOCAL_ACTIVE_TOPIC_KEY = 'engram.activeTopicId.v1';
 const WALLPAPER_FILENAME_KEY = 'engram.wallpaper.filename.v1';
 const WALLPAPER_OPACITY_KEY = 'engram.wallpaper.opacity.v1';
+const SHOW_KEY_BUFFER_KEY = 'engram.showKeyBuffer';
 
 const generateId = () => {
 	const webCrypto = typeof globalThis !== 'undefined' ? globalThis.crypto : undefined;
@@ -67,14 +89,78 @@ const generateId = () => {
 	return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 };
 
-const createEmptyTopic = (title = 'Untitled Topic', folder = ''): Topic => ({
+const createTimestamp = () => new Date().toISOString();
+
+const createEmptyTopic = (title = 'Untitled Topic', parentId: string | null = null, path = '/'): Topic => ({
 	id: generateId(),
 	title,
-	folder,
+	parentId,
+	path,
 	concepts: [{ id: generateId(), text: '', derivatives: [] }]
 });
 
-const INITIAL_TOPIC: Topic = createEmptyTopic('Untitled Topic');
+const createRootFolder = (): FolderNode => {
+	const timestamp = createTimestamp();
+	return {
+		id: generateId(),
+		type: 'folder',
+		name: 'Root',
+		parentId: null,
+		isRoot: true,
+		topic: null,
+		created_at: timestamp,
+		updated_at: timestamp
+	};
+};
+
+const createFileNode = (parentId: string, name = 'Untitled Topic'): FileNode => {
+	const timestamp = createTimestamp();
+	return {
+		id: generateId(),
+		type: 'file',
+		name,
+		parentId,
+		isRoot: false,
+		topic: toTopicDocument({
+			concepts: [{ id: generateId(), text: '', derivatives: [] }]
+		}),
+		created_at: timestamp,
+		updated_at: timestamp
+	};
+};
+
+const createFolderNode = (parentId: string, name = 'Untitled Folder'): FolderNode => {
+	const timestamp = createTimestamp();
+	return {
+		id: generateId(),
+		type: 'folder',
+		name,
+		parentId,
+		isRoot: false,
+		topic: null,
+		created_at: timestamp,
+		updated_at: timestamp
+	};
+};
+
+const createInitialFileSystem = () => {
+	const root = createRootFolder();
+	const initialFile = createFileNode(root.id, 'Untitled Topic');
+	return {
+		rootId: root.id,
+		nodesById: {
+			[root.id]: root,
+			[initialFile.id]: initialFile
+		}
+	};
+};
+
+const INITIAL_FILESYSTEM = createInitialFileSystem();
+const INITIAL_TOPIC = createEmptyTopic(
+	INITIAL_FILESYSTEM.nodesById[Object.keys(INITIAL_FILESYSTEM.nodesById).find(id => id !== INITIAL_FILESYSTEM.rootId)!].name,
+	INITIAL_FILESYSTEM.rootId,
+	'/'
+);
 
 const normalizeTopic = (topic: Topic): Topic => {
 	if (!Array.isArray(topic.concepts) || topic.concepts.length === 0) {
@@ -82,7 +168,9 @@ const normalizeTopic = (topic: Topic): Topic => {
 	}
 	return {
 		...topic,
-		folder: typeof topic.folder === 'string' ? topic.folder : '',
+		title: typeof topic.title === 'string' && topic.title.trim() ? topic.title : 'Untitled Topic',
+		parentId: typeof topic.parentId === 'string' || topic.parentId === null ? topic.parentId : null,
+		path: typeof topic.path === 'string' && topic.path.trim() ? topic.path : '/',
 		concepts: topic.concepts.map(concept => {
 			const derivatives = Array.isArray(concept.derivatives)
 				? concept.derivatives.map(derivative => {
@@ -119,21 +207,177 @@ const normalizeTopic = (topic: Topic): Topic => {
 		return JSON.stringify(sortValue(value));
 	};
 
-const loadLocalTopics = () => {
+const getComparableFileNodeState = (node: FileNode) => ({
+	name: node.name,
+	parentId: node.parentId,
+	topic: node.topic
+});
+
+const getTopicPreview = (topic: FileNode['topic']) => {
+	const preview = topic.concepts
+		.flatMap(concept => [concept.text, ...concept.derivatives.map(derivative => derivative.text)])
+		.map(text => text.trim())
+		.find(Boolean);
+	return preview || 'Empty note';
+};
+
+const ExplorerNodeIcon = ({ type }: { type: ContentNode['type'] }) => (
+	<span
+		className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border ${
+			type === 'folder'
+				? 'border-[#7aa2f7]/35 bg-[#16233a] text-[#7aa2f7]'
+				: 'border-[#9ece6a]/35 bg-[#17261d] text-[#9ece6a]'
+		}`}
+		aria-hidden
+	>
+		{type === 'folder' ? (
+			<svg viewBox="0 0 20 20" className="h-4 w-4 fill-none stroke-current" strokeWidth="1.6">
+				<path d="M2.5 6.5h5l1.4 1.7h8.6v6.8a1.5 1.5 0 0 1-1.5 1.5H4A1.5 1.5 0 0 1 2.5 15z" />
+				<path d="M2.5 6.5V5A1.5 1.5 0 0 1 4 3.5h3.4l1.4 1.7H16A1.5 1.5 0 0 1 17.5 6.7v1.5" />
+			</svg>
+		) : (
+			<svg viewBox="0 0 20 20" className="h-4 w-4 fill-none stroke-current" strokeWidth="1.6">
+				<path d="M5.5 2.5h6.2l3.8 3.8V16A1.5 1.5 0 0 1 14 17.5H5.5A1.5 1.5 0 0 1 4 16V4A1.5 1.5 0 0 1 5.5 2.5z" />
+				<path d="M11.7 2.5v3.8h3.8" />
+				<path d="M7 10h6M7 13h4.5" />
+			</svg>
+		)}
+	</span>
+);
+
+const fileSystemToNodes = (fileSystem: FileSystemState) =>
+	Object.values(fileSystem.nodesById).sort(sortNodesForDisplay);
+
+const getFileNode = (fileSystem: FileSystemState, id: string) => {
+	const node = fileSystem.nodesById[id];
+	return node?.type === 'file' ? node : null;
+};
+
+const toTopicFromNode = (fileSystem: FileSystemState, fileNode: FileNode): Topic =>
+	normalizeTopic({
+		id: fileNode.id,
+		title: fileNode.name,
+		parentId: fileNode.parentId,
+		path: getParentPath(fileNode.id, fileSystem.nodesById),
+		concepts: fileNode.topic.concepts
+	});
+
+const getVisibleExplorerNodes = (
+	fileSystem: FileSystemState,
+	parentId: string,
+	expandedFolderIds: Record<string, boolean>,
+	depth = 0
+): Array<{ node: ContentNode; depth: number }> => {
+	const children = listChildNodes(fileSystem.nodesById, parentId);
+	return children.flatMap(node => {
+		if (node.type === 'folder' && (expandedFolderIds[node.id] ?? false)) {
+			return [{ node, depth }, ...getVisibleExplorerNodes(fileSystem, node.id, expandedFolderIds, depth + 1)];
+		}
+		return [{ node, depth }];
+	});
+};
+
+const cloneFileSystem = (fileSystem: FileSystemState): FileSystemState => ({
+	rootId: fileSystem.rootId,
+	nodesById: Object.values(fileSystem.nodesById).reduce<Record<string, ContentNode>>((acc, node) => {
+		acc[node.id] = node.type === 'file'
+			? {
+				...node,
+				topic: {
+					concepts: node.topic.concepts.map(concept => ({
+						...concept,
+						derivatives: concept.derivatives.map(derivative => ({ ...derivative }))
+					}))
+				}
+			}
+			: { ...node };
+		return acc;
+	}, {})
+});
+
+const migrateLegacyTopicsToFileSystem = (legacyTopics: Array<{
+	id?: string;
+	title?: string;
+	folder?: string;
+	concepts?: Concept[];
+}>) => {
+	const root = createRootFolder();
+	const nodesById: Record<string, ContentNode> = { [root.id]: root };
+	const folderCache = new Map<string, string>([['/', root.id]]);
+
+	for (const rawTopic of legacyTopics) {
+		const legacyTopic = normalizeTopic({
+			id: rawTopic.id ?? generateId(),
+			title: rawTopic.title ?? 'Untitled Topic',
+			parentId: root.id,
+			path: '/',
+			concepts: Array.isArray(rawTopic.concepts) ? rawTopic.concepts : [{ id: generateId(), text: '', derivatives: [] }]
+		});
+		const segments = splitLegacyFolderPath(rawTopic.folder ?? '');
+		let parentId = root.id;
+		let currentPath = '/';
+
+		for (const segment of segments) {
+			const folderName = sanitizeNodeName(segment, 'Untitled Folder');
+			currentPath = currentPath === '/' ? `/${folderName}` : `${currentPath}/${folderName}`;
+			const cachedFolderId = folderCache.get(currentPath);
+			if (cachedFolderId) {
+				parentId = cachedFolderId;
+				continue;
+			}
+			const folder = createFolderNode(parentId, folderName);
+			nodesById[folder.id] = folder;
+			folderCache.set(currentPath, folder.id);
+			parentId = folder.id;
+		}
+
+		const fileNode: FileNode = {
+			...createFileNode(parentId, sanitizeNodeName(legacyTopic.title, 'Untitled Topic')),
+			id: legacyTopic.id,
+			topic: toTopicDocument({
+				concepts: legacyTopic.concepts
+			})
+		};
+		nodesById[fileNode.id] = fileNode;
+	}
+
+	return {
+		rootId: root.id,
+		nodesById
+	};
+};
+
+const loadLocalFileSystem = () => {
 	try {
-		const raw = localStorage.getItem(LOCAL_TOPICS_KEY);
-		if (!raw) return null;
-		const parsed = JSON.parse(raw);
-		if (!Array.isArray(parsed)) return null;
-		return parsed as Topic[];
+		const raw = localStorage.getItem(LOCAL_FILESYSTEM_KEY);
+		if (raw) {
+			const parsed = JSON.parse(raw) as FileSystemState;
+			if (parsed?.rootId && parsed?.nodesById && typeof parsed.nodesById === 'object') {
+				const nodes = Object.values(parsed.nodesById)
+					.map(node => contentNodeSchema.parse(node));
+				return {
+					rootId: parsed.rootId,
+					nodesById: nodes.reduce<Record<string, ContentNode>>((acc, node) => {
+						acc[node.id] = node;
+						return acc;
+					}, {})
+				};
+			}
+		}
+
+		const legacyRaw = localStorage.getItem(LOCAL_TOPICS_KEY);
+		if (!legacyRaw) return null;
+		const parsedLegacy = JSON.parse(legacyRaw);
+		if (!Array.isArray(parsedLegacy)) return null;
+		return migrateLegacyTopicsToFileSystem(parsedLegacy as Topic[]);
 	} catch {
 		return null;
 	}
 };
 
-const saveLocalTopics = (topics: Topic[], activeTopicId: string) => {
+const saveLocalFileSystem = (fileSystem: FileSystemState, activeTopicId: string) => {
 	try {
-		localStorage.setItem(LOCAL_TOPICS_KEY, JSON.stringify(topics));
+		localStorage.setItem(LOCAL_FILESYSTEM_KEY, JSON.stringify(fileSystem));
 		localStorage.setItem(LOCAL_ACTIVE_TOPIC_KEY, activeTopicId);
 	} catch {
 		// ignore storage errors
@@ -236,15 +480,6 @@ const clampStyle = (shouldClamp: boolean): React.CSSProperties => (
 			WebkitBoxOrient: 'initial'
 		}
 );
-
-const cloneTopics = (items: Topic[]): Topic[] =>
-	items.map(item => ({
-		...item,
-		concepts: item.concepts.map(concept => ({
-			...concept,
-			derivatives: concept.derivatives.map(derivative => ({ ...derivative }))
-		}))
-	}));
 
 const isUuid = (value: string) =>
 	/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
@@ -353,7 +588,7 @@ const LegendItem = ({ keys, description }: { keys: string; description: string }
 const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 	const useLocalPersistence = isE2E || guestMode;
 	const auth = authClient as NonNullable<typeof authClient>;
-	const [topics, setTopics] = useState<Topic[]>([INITIAL_TOPIC]);
+	const [fileSystem, setFileSystem] = useState<FileSystemState>(INITIAL_FILESYSTEM);
 	const [activeTopicId, setActiveTopicId] = useState(INITIAL_TOPIC.id);
 	const [isHydrated, setIsHydrated] = useState(false);
 
@@ -397,30 +632,10 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 	const [isDocumentSwitcherOpen, setIsDocumentSwitcherOpen] = useState(false);
 	const [wallpaperOptions, setWallpaperOptions] = useState<WallpaperOption[]>([]);
 	const [wallpaperLoadStatus, setWallpaperLoadStatus] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle');
-	const [selectedWallpaperFilename, setSelectedWallpaperFilename] = useState<string | null>(() => {
-		try {
-			if (typeof window === 'undefined') return null;
-			return localStorage.getItem(WALLPAPER_FILENAME_KEY);
-		} catch {
-			return null;
-		}
-	});
-	const [backgroundOpacity, setBackgroundOpacity] = useState(() => {
-		try {
-			if (typeof window === 'undefined') return DEFAULT_WALLPAPER_OPACITY;
-			return normalizeWallpaperOpacity(localStorage.getItem(WALLPAPER_OPACITY_KEY));
-		} catch {
-			return DEFAULT_WALLPAPER_OPACITY;
-		}
-	});
-	const [showKeyBuffer, setShowKeyBuffer] = useState(() => {
-		try {
-			const stored = localStorage.getItem('engram.showKeyBuffer');
-			return stored ? stored === 'true' : true;
-		} catch {
-			return true;
-		}
-	});
+	const [selectedWallpaperFilename, setSelectedWallpaperFilename] = useState<string | null>(null);
+	const [backgroundOpacity, setBackgroundOpacity] = useState(DEFAULT_WALLPAPER_OPACITY);
+	const [showKeyBuffer, setShowKeyBuffer] = useState(true);
+	const [hasLoadedClientPrefs, setHasLoadedClientPrefs] = useState(false);
 	const [sessionData, setSessionData] = useState<any>(null);
 	const [authSyncError, setAuthSyncError] = useState<string | null>(null);
 	const [isAuthSynced, setIsAuthSynced] = useState(false);
@@ -442,17 +657,22 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 		type: DerivativeType,
 		candidates: Derivative[]
 	} | null>(null);
-	const [topicDrafts, setTopicDrafts] = useState<Record<string, string>>({
+	const [nodeDrafts, setNodeDrafts] = useState<Record<string, string>>({
 		[INITIAL_TOPIC.id]: INITIAL_TOPIC.title
 	});
-	const [folderDrafts, setFolderDrafts] = useState<Record<string, string>>({
-		[INITIAL_TOPIC.id]: INITIAL_TOPIC.folder
+	const [currentFolderId, setCurrentFolderId] = useState(INITIAL_FILESYSTEM.rootId);
+	const [selectedNodeId, setSelectedNodeId] = useState<string | null>(INITIAL_TOPIC.id);
+	const [expandedFolderIds, setExpandedFolderIds] = useState<Record<string, boolean>>({
+		[INITIAL_FILESYSTEM.rootId]: true
 	});
 	const [topicMenuIndex, setTopicMenuIndex] = useState(0);
 	const topicMenuIndexRef = useRef(0);
-	const [topicMenuEditingTarget, setTopicMenuEditingTarget] = useState<{ id: string; field: 'title' | 'folder' } | null>(null);
+	const [topicMenuEditingTarget, setTopicMenuEditingTarget] = useState<{ id: string; field: 'name' } | null>(null);
 	const [topicMenuDeletePending, setTopicMenuDeletePending] = useState(false);
+	const topicMenuDeletePendingRef = useRef(false);
 	const topicMenuUndoStackRef = useRef<TopicMenuSnapshot[]>([]);
+	const [topicMoveTargetId, setTopicMoveTargetId] = useState<string | null>(null);
+	const [topicMoveFolderIndex, setTopicMoveFolderIndex] = useState(0);
 	const [lastCopiedMarkdown, setLastCopiedMarkdown] = useState('');
 	const [toastMessage, setToastMessage] = useState<string | null>(null);
 	const [persistStatus, setPersistStatus] = useState<{
@@ -461,8 +681,12 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 		at?: number;
 	}>(() => ({ state: 'idle' }));
 	const saveTimersRef = useRef<Record<string, number>>({});
+	const inFlightSavePromisesRef = useRef<Record<string, Promise<void>>>({});
 	const lastSavedRef = useRef<Record<string, string>>({});
 	const remoteTopicIdsRef = useRef<Set<string>>(new Set());
+	const fileSystemRef = useRef(fileSystem);
+	const activeTopicIdRef = useRef(activeTopicId);
+	const documentSwitcherWasOpenRef = useRef(false);
 	const sessionDataRef = useRef<any>(null);
 	const sessionBootstrapRef = useRef<Promise<boolean> | null>(null);
 	const reloginPromptedRef = useRef(false);
@@ -476,13 +700,18 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 	const persistMessage = persistStatus.message
 		?? (persistStatus.state === 'error' ? 'Unknown persistence error.' : undefined);
 	const hasActiveSession = useCallback((sessionPayload: any) => Boolean(sessionPayload?.session && sessionPayload?.user), []);
+	const folderNodes = fileSystemToNodes(fileSystem)
+		.filter((node): node is FolderNode => node.type === 'folder');
+	const visibleExplorerNodes = getVisibleExplorerNodes(fileSystem, fileSystem.rootId, expandedFolderIds);
+	const visibleExplorerNodeIdsSignature = visibleExplorerNodes.map(({ node }) => node.id).join('|');
+	const moveableFolders = folderNodes.filter(node => !node.isRoot);
 
 	const formatPersistError = useCallback((error: unknown) => {
 		if (!error) return 'Unknown persistence error.';
 		if (typeof error === 'string') return error;
 		const errorObj = error as { code?: string; message?: string; details?: string; hint?: string } | null;
 		if (errorObj?.code === 'PGRST205') {
-			return 'Missing required table engram_topics.';
+			return 'Missing required table engram_nodes.';
 		}
 		if (error instanceof Error) {
 			if (error.name === 'AuthRequiredError') return 'Auth token missing. Please sign in again.';
@@ -495,33 +724,279 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 		}
 	}, []);
 
-	const remapTopicId = useCallback((prevId: string, nextId: string) => {
-		if (prevId === nextId) return;
-		setTopics(prev => prev.map(item => (item.id === prevId ? { ...item, id: nextId } : item)));
-		setTopicDrafts(prev => {
-			if (!(prevId in prev)) return prev;
-			const { [prevId]: existing, ...rest } = prev;
-			return { ...rest, [nextId]: existing };
-		});
-		setFolderDrafts(prev => {
-			if (!(prevId in prev)) return prev;
-			const { [prevId]: existing, ...rest } = prev;
-			return { ...rest, [nextId]: existing };
-		});
-		setActiveTopicId(prev => (prev === prevId ? nextId : prev));
-		setHState(prev => (prev.topic.id === prevId ? { ...prev, topic: { ...prev.topic, id: nextId } } : prev));
-		const timer = saveTimersRef.current[prevId];
-		if (timer) {
-			saveTimersRef.current[nextId] = timer;
-			delete saveTimersRef.current[prevId];
+	const syncActiveTopicMetadata = useCallback((nextFileSystem: FileSystemState, nextActiveTopicId = activeTopicId) => {
+		const activeNode = getFileNode(nextFileSystem, nextActiveTopicId);
+		if (!activeNode) return;
+		setHState(prev => (
+			prev.topic.id !== nextActiveTopicId
+				? prev
+				: {
+					...prev,
+					topic: {
+						...prev.topic,
+						title: activeNode.name,
+						parentId: activeNode.parentId,
+						path: getParentPath(activeNode.id, nextFileSystem.nodesById)
+					}
+				}
+			));
+	}, [activeTopicId, setHState]);
+
+	const reconcilePersistedNode = useCallback((
+		requestedNode: ContentNode,
+		requestedSerialized: string,
+		persistedNode: ContentNode
+	) => {
+		const persistedSerialized = stableStringify(persistedNode);
+		const currentFileSystem = fileSystemRef.current;
+		const currentNode = currentFileSystem.nodesById[requestedNode.id] ?? currentFileSystem.nodesById[persistedNode.id];
+		const shouldApplyCanonicalNode = currentNode
+			? stableStringify(currentNode) === requestedSerialized
+			: false;
+
+		if (requestedNode.id !== persistedNode.id) {
+			delete lastSavedRef.current[requestedNode.id];
+			remoteTopicIdsRef.current.delete(requestedNode.id);
 		}
-		if (lastSavedRef.current[prevId]) {
-			lastSavedRef.current[nextId] = lastSavedRef.current[prevId];
-			delete lastSavedRef.current[prevId];
+
+		lastSavedRef.current[persistedNode.id] = persistedSerialized;
+		remoteTopicIdsRef.current.add(persistedNode.id);
+
+		if (!shouldApplyCanonicalNode) return;
+
+		const nextNodesById = {
+			...currentFileSystem.nodesById,
+			[persistedNode.id]: persistedNode
+		};
+		if (requestedNode.id !== persistedNode.id) delete nextNodesById[requestedNode.id];
+
+		const nextFileSystem = {
+			rootId: currentFileSystem.rootId === requestedNode.id ? persistedNode.id : currentFileSystem.rootId,
+			nodesById: nextNodesById
+		};
+
+		fileSystemRef.current = nextFileSystem;
+		setFileSystem(nextFileSystem);
+		setNodeDrafts(prev => {
+			const nextDrafts = { ...prev };
+			if (requestedNode.id !== persistedNode.id) delete nextDrafts[requestedNode.id];
+			nextDrafts[persistedNode.id] = persistedNode.name;
+			return nextDrafts;
+		});
+		setSelectedNodeId(prev => (prev === requestedNode.id ? persistedNode.id : prev));
+		setTopicMenuEditingTarget(prev => (
+			prev?.id === requestedNode.id
+				? { ...prev, id: persistedNode.id }
+				: prev
+		));
+
+		const isActiveTopic = persistedNode.type === 'file'
+			&& (activeTopicIdRef.current === requestedNode.id || activeTopicIdRef.current === persistedNode.id);
+
+		if (!isActiveTopic) return;
+
+		if (activeTopicIdRef.current !== persistedNode.id) {
+			activeTopicIdRef.current = persistedNode.id;
+			setActiveTopicId(persistedNode.id);
 		}
-		remoteTopicIdsRef.current.delete(prevId);
-		remoteTopicIdsRef.current.add(nextId);
+		setCurrentFolderId(persistedNode.parentId ?? nextFileSystem.rootId);
+		setHState(prev => (
+			(prev.topic.id !== requestedNode.id && prev.topic.id !== persistedNode.id)
+				? prev
+				: {
+					...prev,
+					topic: {
+						id: persistedNode.id,
+						title: persistedNode.name,
+						parentId: persistedNode.parentId,
+						path: getParentPath(persistedNode.id, nextFileSystem.nodesById),
+						concepts: persistedNode.topic.concepts
+					}
+				}
+		));
 	}, [setHState]);
+
+	const persistNode = useCallback(async (nodeId: string, fallbackNode?: ContentNode) => {
+		const existingSave = inFlightSavePromisesRef.current[nodeId];
+		if (existingSave) {
+			await existingSave;
+			return;
+		}
+
+		const savePromise = (async () => {
+			const node = fileSystemRef.current.nodesById[nodeId] ?? fallbackNode;
+			if (!node || node.isRoot) return;
+
+			const parentId = node.parentId ?? fileSystemRef.current.rootId;
+			if (parentId !== fileSystemRef.current.rootId && !remoteTopicIdsRef.current.has(parentId)) {
+				const parentNode = fileSystemRef.current.nodesById[parentId];
+				if (parentNode?.type === 'folder' && !parentNode.isRoot) {
+					await persistNode(parentNode.id, parentNode);
+				}
+			}
+
+			const currentNode = fileSystemRef.current.nodesById[nodeId] ?? node;
+			const serialized = stableStringify(currentNode);
+			if (lastSavedRef.current[currentNode.id] === serialized) return;
+
+			const payload = contentUpsertRequestSchema.parse(
+				currentNode.type === 'file'
+					? {
+						id: isUuid(currentNode.id) ? currentNode.id : undefined,
+						type: 'file',
+						name: currentNode.name,
+						parentId: currentNode.parentId ?? fileSystemRef.current.rootId,
+						topic: currentNode.topic
+					}
+					: {
+						id: isUuid(currentNode.id) ? currentNode.id : undefined,
+						type: 'folder',
+						name: currentNode.name,
+						parentId: currentNode.parentId ?? fileSystemRef.current.rootId
+					}
+			);
+			const shouldUpdate = !!payload.id && remoteTopicIdsRef.current.has(payload.id);
+			const response = await requestWithAuth('/api/content', {
+				method: shouldUpdate ? 'PUT' : 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify(payload)
+			});
+			if (!response.ok) throw new Error(`Save failed (${response.status})`);
+			const data = upsertContentResponseSchema.parse(await response.json());
+			reconcilePersistedNode(currentNode, serialized, data.data.node);
+		})();
+
+		inFlightSavePromisesRef.current[nodeId] = savePromise;
+		try {
+			await savePromise;
+		} finally {
+			if (inFlightSavePromisesRef.current[nodeId] === savePromise) {
+				delete inFlightSavePromisesRef.current[nodeId];
+			}
+		}
+	}, [reconcilePersistedNode, requestWithAuth]);
+
+	const getSelectedExplorerNode = useCallback(
+		() => visibleExplorerNodes[topicMenuIndexRef.current]?.node
+			?? (selectedNodeId ? fileSystem.nodesById[selectedNodeId] : null)
+			?? null,
+		[fileSystem.nodesById, selectedNodeId, visibleExplorerNodes]
+	);
+
+	const getExplorerInsertionParentId = useCallback(() => {
+		const selectedNode = getSelectedExplorerNode();
+		if (!selectedNode) return fileSystem.rootId;
+		return selectedNode.type === 'folder'
+			? selectedNode.id
+			: (selectedNode.parentId ?? fileSystem.rootId);
+	}, [fileSystem.rootId, getSelectedExplorerNode]);
+
+	const selectExplorerNode = useCallback((
+		nextFileSystem: FileSystemState,
+		nextExpandedFolderIds: Record<string, boolean>,
+		nodeId: string
+	) => {
+		const nextVisibleNodes = getVisibleExplorerNodes(nextFileSystem, nextFileSystem.rootId, nextExpandedFolderIds);
+		const nextIndex = Math.max(0, nextVisibleNodes.findIndex(entry => entry.node.id === nodeId));
+		setTopicMenuIndex(nextIndex);
+		topicMenuIndexRef.current = nextIndex;
+		setSelectedNodeId(nodeId);
+	}, []);
+
+	function requestWithAuth(path: string, init?: RequestInit) {
+		return authFetch(path, init, { onUnauthorized: handleUnauthorized });
+	}
+
+	const queueSaveNode = useCallback((nextNode: ContentNode) => {
+		if (useLocalPersistence || !userId || !isHydrated || !isAuthSynced || nextNode.isRoot) return;
+		const serialized = stableStringify(nextNode);
+		if (lastSavedRef.current[nextNode.id] === serialized) return;
+		const existingTimer = saveTimersRef.current[nextNode.id];
+		if (existingTimer) window.clearTimeout(existingTimer);
+		saveTimersRef.current[nextNode.id] = window.setTimeout(async () => {
+			delete saveTimersRef.current[nextNode.id];
+			try {
+				setPersistStatus({ state: 'saving', message: 'Saving filesystem…' });
+				await persistNode(nextNode.id, nextNode);
+				setPersistStatus({ state: 'saved', message: 'Saved', at: Date.now() });
+			} catch (error) {
+				console.error('Failed to save node', error);
+				setPersistStatus({ state: 'error', message: formatPersistError(error) });
+			}
+		}, 400);
+	}, [formatPersistError, isAuthSynced, isHydrated, persistNode, useLocalPersistence, userId]);
+
+	const deletePersistedNode = useCallback(async (nodeId: string) => {
+		if (useLocalPersistence || !userId || !isHydrated || !isAuthSynced) return;
+		const existingTimer = saveTimersRef.current[nodeId];
+		if (existingTimer) window.clearTimeout(existingTimer);
+		delete saveTimersRef.current[nodeId];
+		delete lastSavedRef.current[nodeId];
+		try {
+			const response = await requestWithAuth(`/api/content?id=${encodeURIComponent(nodeId)}`, {
+				method: 'DELETE'
+			});
+			if (!response.ok) throw new Error(`Delete failed (${response.status})`);
+			const payload = deleteContentResponseSchema.parse(await response.json());
+			payload.data.deletedIds.forEach(id => {
+				delete lastSavedRef.current[id];
+				remoteTopicIdsRef.current.delete(id);
+			});
+		} catch (error) {
+			console.error('Failed to delete node', error);
+		}
+	}, [isAuthSynced, isHydrated, requestWithAuth, useLocalPersistence, userId]);
+
+	const syncNodeDraft = useCallback((id: string, name: string) => {
+		setNodeDrafts(prev => ({ ...prev, [id]: name }));
+	}, []);
+
+	const snapshotTopicMenuState = useCallback((): TopicMenuSnapshot => ({
+		fileSystem: cloneFileSystem(fileSystem),
+		activeTopicId,
+		nodeDrafts: { ...nodeDrafts },
+		currentFolderId,
+		selectedNodeId,
+		topicMenuIndex
+	}), [activeTopicId, currentFolderId, fileSystem, nodeDrafts, selectedNodeId, topicMenuIndex]);
+
+	const pushTopicMenuUndoSnapshot = useCallback(() => {
+		topicMenuUndoStackRef.current = [
+			...topicMenuUndoStackRef.current,
+			snapshotTopicMenuState()
+		].slice(-50);
+	}, [snapshotTopicMenuState]);
+
+	const undoTopicMenuChange = useCallback(() => {
+		const snapshot = topicMenuUndoStackRef.current.pop();
+		if (!snapshot) return;
+
+		Object.values(fileSystem.nodesById).forEach(node => {
+			if (!node.isRoot && !snapshot.fileSystem.nodesById[node.id]) {
+				void deletePersistedNode(node.id);
+			}
+		});
+		Object.values(snapshot.fileSystem.nodesById).forEach(node => {
+			if (!node.isRoot) queueSaveNode(node);
+		});
+
+		setFileSystem(snapshot.fileSystem);
+		setActiveTopicId(snapshot.activeTopicId);
+		setNodeDrafts(snapshot.nodeDrafts);
+		setCurrentFolderId(snapshot.currentFolderId);
+		setSelectedNodeId(snapshot.selectedNodeId);
+		setTopicMenuIndex(snapshot.topicMenuIndex);
+		topicMenuIndexRef.current = snapshot.topicMenuIndex;
+		setTopicMenuEditingTarget(null);
+		topicMenuDeletePendingRef.current = false;
+		setTopicMenuDeletePending(false);
+		setTopicMoveTargetId(null);
+
+		const restoredActive = getFileNode(snapshot.fileSystem, snapshot.activeTopicId)
+			?? fileSystemToNodes(snapshot.fileSystem).find((node): node is FileNode => node.type === 'file');
+		if (!restoredActive) return;
+		resetHistory({ topic: toTopicFromNode(snapshot.fileSystem, restoredActive), cursorIdx: 0, derivIdx: -1 });
+	}, [deletePersistedNode, fileSystem.nodesById, queueSaveNode, resetHistory]);
 	const bootstrapSessionOnce = useCallback(async () => {
 		if (guestMode) return false;
 		if (!sessionBootstrapRef.current) {
@@ -561,9 +1036,6 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 		return false;
 	}, [bootstrapSessionOnce]);
 
-	const requestWithAuth = useCallback((path: string, init?: RequestInit) => {
-		return authFetch(path, init, { onUnauthorized: handleUnauthorized });
-	}, [handleUnauthorized]);
 	const syncAuthCookie = useCallback(async (sessionPayload?: any) => {
 		if (useLocalPersistence) {
 			setAuthSyncError(null);
@@ -580,226 +1052,193 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 		setIsAuthSynced(true);
 	}, [hasActiveSession, useLocalPersistence]);
 
-	const queueSaveTopic = useCallback((nextTopic: Topic) => {
-		if (useLocalPersistence || !userId || !isHydrated || !isAuthSynced) return;
-		const normalized = normalizeTopic(nextTopic);
-		const serialized = stableStringify(normalized);
-		if (lastSavedRef.current[normalized.id] === serialized) return;
-		const existingTimer = saveTimersRef.current[normalized.id];
-		if (existingTimer) window.clearTimeout(existingTimer);
-		saveTimersRef.current[normalized.id] = window.setTimeout(async () => {
-			try {
-				setPersistStatus({ state: 'saving', message: 'Saving content…' });
-				const payload = contentUpsertRequestSchema.parse({
-					id: isUuid(normalized.id) ? normalized.id : undefined,
-					title: normalized.title,
-					topic: normalized
-				});
-				const shouldUpdate = !!payload.id && remoteTopicIdsRef.current.has(payload.id);
-				let response = await requestWithAuth('/api/content', {
-					method: shouldUpdate ? 'PUT' : 'POST',
-					headers: { 'Content-Type': 'application/json' },
-					body: JSON.stringify(payload)
-				});
-				if (!response.ok && shouldUpdate) {
-					response = await requestWithAuth('/api/content', {
-						method: 'POST',
-						headers: { 'Content-Type': 'application/json' },
-						body: JSON.stringify({ title: payload.title, topic: payload.topic })
-					});
-				}
-				if (!response.ok) throw new Error(`Save failed (${response.status})`);
-				const data = upsertContentResponseSchema.parse(await response.json());
-				if (data.data.topic.id !== normalized.id) remapTopicId(normalized.id, data.data.topic.id);
-				const storedSerialized = stableStringify(data.data.topic.topic ?? null);
-				if (storedSerialized !== serialized) {
-					setPersistStatus({ state: 'mismatch', message: 'Saved, but verification mismatch (JSON order/shape).' });
-					console.warn('Persistence mismatch', { expected: normalized, actual: data.data.topic.topic });
-					return;
-				}
-				lastSavedRef.current[data.data.topic.id] = serialized;
-				remoteTopicIdsRef.current.add(data.data.topic.id);
-				setPersistStatus({ state: 'saved', message: 'Saved', at: Date.now() });
-			} catch (error) {
-				console.error('Failed to save topic', error);
-				const message = formatPersistError(error);
-				setPersistStatus({ state: 'error', message });
-			}
-		}, 400);
-	}, [formatPersistError, isAuthSynced, isHydrated, remapTopicId, requestWithAuth, useLocalPersistence, userId]);
-
-	const deletePersistedTopic = async (topicId: string) => {
-		if (useLocalPersistence || !userId || !isHydrated || !isAuthSynced) return;
-		const existingTimer = saveTimersRef.current[topicId];
-		if (existingTimer) window.clearTimeout(existingTimer);
-		delete saveTimersRef.current[topicId];
-		delete lastSavedRef.current[topicId];
-		try {
-			const response = await requestWithAuth(`/api/content?id=${encodeURIComponent(topicId)}`, {
-				method: 'DELETE'
-			});
-			if (!response.ok) throw new Error(`Delete failed (${response.status})`);
-			deleteContentResponseSchema.parse(await response.json());
-			remoteTopicIdsRef.current.delete(topicId);
-		} catch (error) {
-			console.error('Failed to delete topic', error);
+	const commitNodeDraft = useCallback((id: string) => {
+		const target = fileSystem.nodesById[id];
+		if (!target || target.isRoot) return null;
+		const desiredName = sanitizeNodeName(nodeDrafts[id] ?? target.name, target.type === 'file' ? 'Untitled Topic' : 'Untitled Folder');
+		const nextName = getAvailableSiblingName(desiredName, target.parentId, fileSystem.nodesById, id);
+		if (nextName === target.name) {
+			return {
+				nextFileSystem: fileSystem,
+				committedNode: target
+			};
 		}
-	};
 
-	const syncTopicMetaDraft = (id: string, updates: { title?: string; folder?: string }) => {
-		if (updates.title !== undefined) {
-			setTopicDrafts(prev => ({ ...prev, [id]: updates.title as string }));
-		}
-		if (updates.folder !== undefined) {
-			setFolderDrafts(prev => ({ ...prev, [id]: updates.folder as string }));
-		}
-	};
-
-	const snapshotTopicMenuState = useCallback((): TopicMenuSnapshot => ({
-		topics: cloneTopics(topics),
-		activeTopicId,
-		topicDrafts: { ...topicDrafts },
-		folderDrafts: { ...folderDrafts },
-		topicMenuIndex
-	}), [topics, activeTopicId, topicDrafts, folderDrafts, topicMenuIndex]);
-
-	const pushTopicMenuUndoSnapshot = useCallback(() => {
-		topicMenuUndoStackRef.current = [
-			...topicMenuUndoStackRef.current,
-			snapshotTopicMenuState()
-		].slice(-50);
-	}, [snapshotTopicMenuState]);
-
-	const undoTopicMenuChange = useCallback(() => {
-		const snapshot = topicMenuUndoStackRef.current.pop();
-		if (!snapshot) return;
-
-		const snapshotIds = new Set(snapshot.topics.map(item => item.id));
-		const currentIds = new Set(topics.map(item => item.id));
-
-		topics.forEach(item => {
-			if (!snapshotIds.has(item.id)) {
-				void deletePersistedTopic(item.id);
+		pushTopicMenuUndoSnapshot();
+		const updatedNode = {
+			...target,
+			name: nextName,
+			updated_at: createTimestamp()
+		} as ContentNode;
+		const nextFileSystem = {
+			...fileSystem,
+			nodesById: {
+				...fileSystem.nodesById,
+				[id]: updatedNode
 			}
-		});
-		snapshot.topics.forEach(item => {
-			if (!currentIds.has(item.id) || topics.find(existing => existing.id === item.id)?.title !== item.title || topics.find(existing => existing.id === item.id)?.folder !== item.folder) {
-				queueSaveTopic(item);
-			}
-		});
+		};
+		setFileSystem(nextFileSystem);
+		syncNodeDraft(id, nextName);
+		queueSaveNode(updatedNode);
+		syncActiveTopicMetadata(nextFileSystem);
+		return {
+			nextFileSystem,
+			committedNode: updatedNode
+		};
+	}, [fileSystem, nodeDrafts, pushTopicMenuUndoSnapshot, queueSaveNode, syncActiveTopicMetadata, syncNodeDraft]);
 
-		setTopics(snapshot.topics);
-		setActiveTopicId(snapshot.activeTopicId);
-		setTopicDrafts(snapshot.topicDrafts);
-		setFolderDrafts(snapshot.folderDrafts);
-		const nextIndex = Math.min(snapshot.topicMenuIndex, Math.max(0, snapshot.topics.length - 1));
-		setTopicMenuIndex(nextIndex);
-		topicMenuIndexRef.current = nextIndex;
+	const openTopic = useCallback((id: string) => {
+		const committed = commitNodeDraft(id);
+		const nextFileSystem = committed?.nextFileSystem ?? fileSystem;
+		const target = getFileNode(nextFileSystem, id);
+		if (!target) return;
+		const nextTopic = toTopicFromNode(nextFileSystem, target);
+		setActiveTopicId(id);
+		setSelectedNodeId(id);
+		setCurrentFolderId(target.parentId ?? nextFileSystem.rootId);
+		setExpandedFolderIds(prev => ({
+			...prev,
+			...getAncestorIds(target.id, nextFileSystem.nodesById).reduce<Record<string, boolean>>((acc, ancestorId) => {
+				acc[ancestorId] = true;
+				return acc;
+			}, {}),
+			[target.parentId ?? nextFileSystem.rootId]: true
+		}));
+		resetHistory({ topic: nextTopic, cursorIdx: 0, derivIdx: -1 });
 		setTopicMenuEditingTarget(null);
-		setTopicMenuDeletePending(false);
+		setTopicMoveTargetId(null);
+		setIsDocumentSwitcherOpen(false);
+	}, [commitNodeDraft, fileSystem, resetHistory]);
 
-		const restoredActive = snapshot.topics.find(item => item.id === snapshot.activeTopicId) ?? snapshot.topics[0];
-		if (!restoredActive) return;
-		if (hStateRef.current.topic.id === restoredActive.id) {
-			setHState(prev => ({ ...prev, topic: restoredActive }));
+	const createTopic = useCallback(() => {
+		const parentId = getExplorerInsertionParentId();
+		pushTopicMenuUndoSnapshot();
+		const newFile = createFileNode(parentId, 'Untitled Topic');
+		const nextFileSystem = {
+			...fileSystem,
+			nodesById: {
+				...fileSystem.nodesById,
+				[newFile.id]: newFile
+			}
+		};
+		const nextExpandedFolderIds = { ...expandedFolderIds, [parentId]: true };
+		setFileSystem(nextFileSystem);
+		setActiveTopicId(newFile.id);
+		setCurrentFolderId(parentId);
+		selectExplorerNode(nextFileSystem, nextExpandedFolderIds, newFile.id);
+		syncNodeDraft(newFile.id, newFile.name);
+		resetHistory({ topic: toTopicFromNode(nextFileSystem, newFile), cursorIdx: 0, derivIdx: -1 });
+		setExpandedFolderIds(nextExpandedFolderIds);
+		setTopicMenuEditingTarget({ id: newFile.id, field: 'name' });
+		queueSaveNode(newFile);
+	}, [expandedFolderIds, fileSystem, getExplorerInsertionParentId, pushTopicMenuUndoSnapshot, queueSaveNode, resetHistory, selectExplorerNode, syncNodeDraft]);
+
+	const createFolder = useCallback(() => {
+		const parentId = getExplorerInsertionParentId();
+		pushTopicMenuUndoSnapshot();
+		const newFolder = createFolderNode(parentId, 'Untitled Folder');
+		const nextFileSystem = {
+			...fileSystem,
+			nodesById: {
+				...fileSystem.nodesById,
+				[newFolder.id]: newFolder
+			}
+		};
+		const nextExpandedFolderIds = { ...expandedFolderIds, [parentId]: true };
+		setFileSystem(nextFileSystem);
+		setCurrentFolderId(parentId);
+		selectExplorerNode(nextFileSystem, nextExpandedFolderIds, newFolder.id);
+		setExpandedFolderIds(nextExpandedFolderIds);
+		syncNodeDraft(newFolder.id, newFolder.name);
+		setTopicMenuEditingTarget({ id: newFolder.id, field: 'name' });
+		queueSaveNode(newFolder);
+	}, [expandedFolderIds, fileSystem, getExplorerInsertionParentId, pushTopicMenuUndoSnapshot, queueSaveNode, selectExplorerNode, syncNodeDraft]);
+
+	const moveNodeToFolder = useCallback((nodeId: string, destinationFolderId: string) => {
+		const target = fileSystem.nodesById[nodeId];
+		if (!target || target.isRoot || target.parentId === destinationFolderId) return;
+		if (nodeId === destinationFolderId || (target.type === 'folder' && getSubtreeNodeIds(nodeId, fileSystem.nodesById).includes(destinationFolderId))) {
+			setToastMessage('Cannot move a folder into itself.');
 			return;
 		}
-		resetHistory({ topic: restoredActive, cursorIdx: 0, derivIdx: -1 });
-	}, [deletePersistedTopic, queueSaveTopic, resetHistory, setHState, topics]);
 
-	const openTopic = (id: string) => {
-		commitTopicMetaDraft(id);
-		const target = topics.find(item => item.id === id);
-		if (!target) return;
-		const draftTitle = topicDrafts[id] ?? target.title;
-		const draftFolder = folderDrafts[id] ?? target.folder;
-		const resolvedTopic = (draftTitle === target.title && draftFolder === target.folder)
-			? target
-			: { ...target, title: draftTitle, folder: draftFolder };
-		setTopics(prev => prev.map(item => (item.id === id ? resolvedTopic : item)));
-		setActiveTopicId(id);
-		syncTopicMetaDraft(id, { title: resolvedTopic.title, folder: resolvedTopic.folder });
-		resetHistory({ topic: resolvedTopic, cursorIdx: 0, derivIdx: -1 });
-		setTopicMenuEditingTarget(null);
-		setIsDocumentSwitcherOpen(false);
-	};
-
-	const createTopic = () => {
 		pushTopicMenuUndoSnapshot();
-		const newTopic = createEmptyTopic();
-		setTopics(prev => [...prev, newTopic]);
-		setActiveTopicId(newTopic.id);
-		syncTopicMetaDraft(newTopic.id, { title: newTopic.title, folder: newTopic.folder });
-		resetHistory({ topic: newTopic, cursorIdx: 0, derivIdx: -1 });
-		setTopicMenuIndex(Math.max(0, topics.length));
-		setTopicMenuEditingTarget({ id: newTopic.id, field: 'title' });
-		queueSaveTopic(newTopic);
-	};
-
-	const commitTopicMetaDraft = (id: string, fields?: Array<'title' | 'folder'>) => {
-		const target = topics.find(item => item.id === id);
-		if (!target) return;
-		const shouldCommitTitle = !fields || fields.includes('title');
-		const shouldCommitFolder = !fields || fields.includes('folder');
-		const nextTitle = shouldCommitTitle ? (topicDrafts[id] ?? target.title) : target.title;
-		const nextFolder = shouldCommitFolder ? (folderDrafts[id] ?? target.folder) : target.folder;
-		if (nextTitle === target.title && nextFolder === target.folder) return;
-		pushTopicMenuUndoSnapshot();
-		const updated = {
+		const nextName = getAvailableSiblingName(target.name, destinationFolderId, fileSystem.nodesById, nodeId);
+		const updatedNode = {
 			...target,
-			title: nextTitle,
-			folder: nextFolder
-		};
-		setTopics(prev => prev.map(item => {
-			if (item.id !== id) return item;
-			return updated;
-		}));
-		queueSaveTopic(updated);
-		if (id === activeTopicId) {
-			setHState(prev => ({
-				...prev,
-				topic: {
-					...prev.topic,
-					title: nextTitle,
-					folder: nextFolder
-				}
-			}));
-		}
-	};
-
-	const updateTopicMeta = (id: string, updates: { title?: string; folder?: string }) => {
-		syncTopicMetaDraft(id, updates);
-	};
-
-	const deleteTopic = (id: string) => {
-		pushTopicMenuUndoSnapshot();
-		setTopics(prev => {
-			const filtered = prev.filter(item => item.id !== id);
-			const nextTopics = filtered.length ? filtered : [createEmptyTopic()];
-			const nextActive = id === activeTopicId
-				? nextTopics[0]
-				: (nextTopics.find(item => item.id === activeTopicId) || nextTopics[0]);
-			if (nextActive.id !== activeTopicId) {
-				setActiveTopicId(nextActive.id);
-				syncTopicMetaDraft(nextActive.id, { title: nextActive.title, folder: nextActive.folder });
-				resetHistory({ topic: nextActive, cursorIdx: 0, derivIdx: -1 });
+			name: nextName,
+			parentId: destinationFolderId,
+			updated_at: createTimestamp()
+		} as ContentNode;
+		const nextFileSystem = {
+			...fileSystem,
+			nodesById: {
+				...fileSystem.nodesById,
+				[nodeId]: updatedNode
 			}
-			setTopicMenuIndex(prevIndex => Math.min(prevIndex, Math.max(0, nextTopics.length - 1)));
-			return nextTopics;
-		});
-		setTopicDrafts(prev => {
+		};
+		setFileSystem(nextFileSystem);
+		setCurrentFolderId(destinationFolderId);
+		setSelectedNodeId(nodeId);
+		setExpandedFolderIds(prev => ({ ...prev, [destinationFolderId]: true }));
+		syncNodeDraft(nodeId, nextName);
+		queueSaveNode(updatedNode);
+		syncActiveTopicMetadata(nextFileSystem);
+		setTopicMoveTargetId(null);
+	}, [fileSystem, pushTopicMenuUndoSnapshot, queueSaveNode, syncActiveTopicMetadata, syncNodeDraft]);
+
+	const deleteTopic = useCallback((id: string) => {
+		const target = fileSystem.nodesById[id];
+		if (!target || target.isRoot) return;
+		pushTopicMenuUndoSnapshot();
+
+		const deletedIds = new Set(getSubtreeNodeIds(id, fileSystem.nodesById));
+		let nextFileSystem: FileSystemState = {
+			...fileSystem,
+			nodesById: Object.values(fileSystem.nodesById).reduce<Record<string, ContentNode>>((acc, node) => {
+				if (!deletedIds.has(node.id)) acc[node.id] = node;
+				return acc;
+			}, {})
+		};
+
+		let nextActiveTopicId = activeTopicId;
+		if (deletedIds.has(activeTopicId)) {
+			const remainingFiles = fileSystemToNodes(nextFileSystem).filter((node): node is FileNode => node.type === 'file');
+			if (remainingFiles.length === 0) {
+				const fallbackFile = createFileNode(nextFileSystem.rootId, 'Untitled Topic');
+				nextFileSystem = {
+					...nextFileSystem,
+					nodesById: {
+						...nextFileSystem.nodesById,
+						[fallbackFile.id]: fallbackFile
+					}
+				};
+				nextActiveTopicId = fallbackFile.id;
+				queueSaveNode(fallbackFile);
+			} else {
+				nextActiveTopicId = remainingFiles[0].id;
+			}
+		}
+
+		setFileSystem(nextFileSystem);
+		setActiveTopicId(nextActiveTopicId);
+		setCurrentFolderId(target.parentId ?? nextFileSystem.rootId);
+		setSelectedNodeId(nextActiveTopicId);
+		setNodeDrafts(prev => {
 			const next = { ...prev };
-			delete next[id];
+			deletedIds.forEach(nodeId => delete next[nodeId]);
 			return next;
 		});
-		setFolderDrafts(prev => {
-			const next = { ...prev };
-			delete next[id];
-			return next;
-		});
-		setTopicMenuEditingTarget(prev => (prev?.id === id ? null : prev));
-		deletePersistedTopic(id);
-	};
+		setTopicMenuEditingTarget(prev => (prev?.id && deletedIds.has(prev.id) ? null : prev));
+		setTopicMoveTargetId(prev => (prev && deletedIds.has(prev) ? null : prev));
+
+		const nextActive = getFileNode(nextFileSystem, nextActiveTopicId);
+		if (nextActive) {
+			resetHistory({ topic: toTopicFromNode(nextFileSystem, nextActive), cursorIdx: 0, derivIdx: -1 });
+		}
+
+		void deletePersistedNode(id);
+	}, [activeTopicId, deletePersistedNode, fileSystem, pushTopicMenuUndoSnapshot, queueSaveNode, resetHistory]);
 
 	const activeRef = useRef<HTMLDivElement>(null);
 	const scrollContainerRef = useRef<HTMLDivElement>(null);
@@ -1228,17 +1667,35 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 		const handleKeyDown = (e: KeyboardEvent) => {
 			if (e.ctrlKey && (e.key === 'r' || e.key === 'R')) return;
 			const target = e.target as HTMLElement | null;
-			const isTextInput = !!target && (
-				target.tagName === 'INPUT' ||
-				target.tagName === 'TEXTAREA' ||
-				target.isContentEditable
-			);
+			const isTopicMenuNameInput = target instanceof HTMLInputElement
+				&& (target.dataset.testid || '').startsWith('topic-name-input-');
 			if (isDocumentSwitcherOpen) {
-				if (!isTextInput) {
+				if (!isTopicMenuNameInput) {
 					e.preventDefault();
-				if (e.key === 'Escape') {
+					if (topicMoveTargetId) {
+						if (e.key === 'Escape') {
+							setTopicMoveTargetId(null);
+							return;
+						}
+						if (e.key === 'j') {
+							setTopicMoveFolderIndex(prev => Math.min(prev + 1, Math.max(0, visibleMoveFolders.length - 1)));
+							return;
+						}
+						if (e.key === 'k') {
+							setTopicMoveFolderIndex(prev => Math.max(0, prev - 1));
+							return;
+						}
+						if (e.key === 'Enter') {
+							const destination = visibleMoveFolders[topicMoveFolderIndex];
+							if (destination) moveNodeToFolder(topicMoveTargetId, destination.id);
+							return;
+						}
+						return;
+					}
+					if (e.key === 'Escape') {
 							setIsDocumentSwitcherOpen(false);
 							setTopicMenuEditingTarget(null);
+							topicMenuDeletePendingRef.current = false;
 							setTopicMenuDeletePending(false);
 							return;
 						}
@@ -1246,71 +1703,113 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 							undoTopicMenuChange();
 							return;
 						}
-						if (topicMenuDeletePending) {
+						if (topicMenuDeletePendingRef.current) {
+							topicMenuDeletePendingRef.current = false;
 							setTopicMenuDeletePending(false);
 							if (e.key === 'd') {
-								const target = topics[topicMenuIndexRef.current];
+								const target = visibleExplorerNodes[topicMenuIndexRef.current]?.node;
 								if (target) deleteTopic(target.id);
 								return;
 							}
 						}
 						if (e.key === 'j') {
-							const nextIndex = Math.min(topicMenuIndexRef.current + 1, Math.max(0, topics.length - 1));
+							const nextIndex = Math.min(topicMenuIndexRef.current + 1, Math.max(0, visibleExplorerNodes.length - 1));
 							topicMenuIndexRef.current = nextIndex;
-						setTopicMenuIndex(nextIndex);
-						return;
-					}
-					if (e.key === 'k') {
+							setTopicMenuIndex(nextIndex);
+							setSelectedNodeId(visibleExplorerNodes[nextIndex]?.node.id ?? null);
+							return;
+						}
+						if (e.key === 'k') {
 						const nextIndex = Math.max(0, topicMenuIndexRef.current - 1);
 						topicMenuIndexRef.current = nextIndex;
 						setTopicMenuIndex(nextIndex);
+						setSelectedNodeId(visibleExplorerNodes[nextIndex]?.node.id ?? null);
 						return;
 					}
 						if (e.key === 'o') {
 							createTopic();
 							return;
 						}
+						if (e.key === 'O') {
+							createFolder();
+							return;
+						}
 						if (e.key === 'd') {
+							topicMenuDeletePendingRef.current = true;
 							setTopicMenuDeletePending(true);
 							return;
 						}
 					if (e.key === 'c') {
-						const target = topics[topicMenuIndexRef.current];
+						const target = visibleExplorerNodes[topicMenuIndexRef.current]?.node;
 						if (target) {
-							setTopicMenuEditingTarget({ id: target.id, field: 'title' });
+							setTopicMenuEditingTarget({ id: target.id, field: 'name' });
 							window.setTimeout(() => {
-								document.querySelector<HTMLInputElement>(`[data-testid="topic-title-input-${target.id}"]`)?.focus();
+								document.querySelector<HTMLInputElement>(`[data-testid="topic-name-input-${target.id}"]`)?.focus();
 							}, 0);
 						}
 						return;
 					}
 					if (e.key === 'f') {
-						const target = topics[topicMenuIndexRef.current];
+						const target = visibleExplorerNodes[topicMenuIndexRef.current]?.node;
 						if (target) {
-							setTopicMenuEditingTarget({ id: target.id, field: 'folder' });
-							window.setTimeout(() => {
-								document.querySelector<HTMLInputElement>(`[data-testid="topic-folder-input-${target.id}"]`)?.focus();
-							}, 0);
+							setTopicMoveTargetId(target.id);
+							setTopicMoveFolderIndex(0);
+						}
+						return;
+					}
+					if (e.key === 'h') {
+						const target = visibleExplorerNodes[topicMenuIndexRef.current]?.node;
+						if (target?.type === 'folder' && (expandedFolderIds[target.id] ?? false)) {
+							setExpandedFolderIds(prev => ({ ...prev, [target.id]: false }));
+							return;
+						}
+						const parentId = target?.parentId;
+						if (parentId && parentId !== fileSystem.rootId) {
+							setSelectedNodeId(parentId);
+							const parentIndex = visibleExplorerNodes.findIndex(entry => entry.node.id === parentId);
+							if (parentIndex >= 0) {
+								setTopicMenuIndex(parentIndex);
+								topicMenuIndexRef.current = parentIndex;
+							}
 						}
 						return;
 					}
 					if (e.key === 'Enter' || e.key === 'l') {
-						const target = topics[topicMenuIndexRef.current];
-						if (target) openTopic(target.id);
+						const target = visibleExplorerNodes[topicMenuIndexRef.current]?.node;
+						if (!target) return;
+						if (target.type === 'folder') {
+							setCurrentFolderId(target.id);
+							setExpandedFolderIds(prev => ({ ...prev, [target.id]: true }));
+							setSelectedNodeId(target.id);
+							return;
+						}
+						openTopic(target.id);
 						return;
 					}
 					return;
 				}
+				if (!isTopicMenuNameInput) return;
 					if (e.key === 'Escape') {
 						e.preventDefault();
+						const targetId = topicMenuEditingTarget?.id;
+						if (targetId) {
+							const existingName = fileSystem.nodesById[targetId]?.name;
+							if (existingName) syncNodeDraft(targetId, existingName);
+						}
 						setTopicMenuEditingTarget(null);
+						topicMenuDeletePendingRef.current = false;
 						setTopicMenuDeletePending(false);
 						return;
 					}
 				if (e.key === 'Enter') {
 					e.preventDefault();
 					const targetId = topicMenuEditingTarget?.id;
-					if (targetId) openTopic(targetId);
+					if (!targetId) return;
+					if (fileSystem.nodesById[targetId]?.type === 'file') openTopic(targetId);
+					else {
+						commitNodeDraft(targetId);
+						setTopicMenuEditingTarget(null);
+					}
 					return;
 				}
 				return;
@@ -1898,6 +2397,21 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 		sessionDataRef.current = sessionData;
 	}, [sessionData]);
 
+	useLayoutEffect(() => {
+		try {
+			setSelectedWallpaperFilename(localStorage.getItem(WALLPAPER_FILENAME_KEY));
+			setBackgroundOpacity(normalizeWallpaperOpacity(localStorage.getItem(WALLPAPER_OPACITY_KEY)));
+			const storedShowKeyBuffer = localStorage.getItem(SHOW_KEY_BUFFER_KEY);
+			if (storedShowKeyBuffer !== null) {
+				setShowKeyBuffer(storedShowKeyBuffer === 'true');
+			}
+		} catch {
+			// ignore storage errors
+		} finally {
+			setHasLoadedClientPrefs(true);
+		}
+	}, []);
+
 	useEffect(() => {
 		setProfileForm({
 			name: (user?.name || user?.displayName || '') as string,
@@ -1936,19 +2450,31 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 		const hydrateTopics = async () => {
 			if (isHydrated) return;
 			if (useLocalPersistence) {
-				const stored = loadLocalTopics();
+				const stored = loadLocalFileSystem();
 				const activeId = localStorage.getItem(LOCAL_ACTIVE_TOPIC_KEY);
-				const normalized = (stored && stored.length)
-					? stored.map(normalizeTopic)
-					: [createEmptyTopic('Untitled Topic')];
-				const nextActive = normalized.find(item => item.id === activeId) || normalized[0];
+				const nextFileSystem = stored ?? createInitialFileSystem();
+				const nextFiles = fileSystemToNodes(nextFileSystem).filter((node): node is FileNode => node.type === 'file');
+				const nextActiveNode = nextFiles.find(node => node.id === activeId) || nextFiles[0];
+				if (!nextActiveNode) return;
+				const nextTopic = toTopicFromNode(nextFileSystem, nextActiveNode);
 				if (!isActive) return;
-				setTopics(normalized);
-				setActiveTopicId(nextActive.id);
-				setTopicDrafts(normalized.reduce((acc, item) => ({ ...acc, [item.id]: item.title }), {}));
-				setFolderDrafts(normalized.reduce((acc, item) => ({ ...acc, [item.id]: item.folder }), {}));
-				resetHistory({ topic: nextActive, cursorIdx: 0, derivIdx: -1 });
-				if (!stored || stored.length === 0) saveLocalTopics(normalized, nextActive.id);
+				setFileSystem(nextFileSystem);
+				setActiveTopicId(nextActiveNode.id);
+				setCurrentFolderId(nextActiveNode.parentId ?? nextFileSystem.rootId);
+				setSelectedNodeId(nextActiveNode.id);
+				setExpandedFolderIds({
+					[nextFileSystem.rootId]: true,
+					...getAncestorIds(nextActiveNode.id, nextFileSystem.nodesById).reduce<Record<string, boolean>>((acc, id) => {
+						acc[id] = true;
+						return acc;
+					}, {})
+				});
+				setNodeDrafts(fileSystemToNodes(nextFileSystem).reduce<Record<string, string>>((acc, node) => {
+					if (!node.isRoot) acc[node.id] = node.name;
+					return acc;
+				}, {}));
+				resetHistory({ topic: nextTopic, cursorIdx: 0, derivIdx: -1 });
+				if (!stored) saveLocalFileSystem(nextFileSystem, nextActiveNode.id);
 				setIsHydrated(true);
 				return;
 			}
@@ -1958,22 +2484,48 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 				const response = await requestWithAuth('/api/content');
 				if (!response.ok) throw new Error(`Load failed (${response.status})`);
 				const payload = listContentResponseSchema.parse(await response.json());
-				const normalized = payload.data.topics.map(row => {
-					remoteTopicIdsRef.current.add(row.id);
-					const content = toTopicContent(row.topic);
-					return normalizeTopic({ ...content, id: row.id, title: row.title });
-				});
-				const nextTopics = normalized.length ? normalized : [createEmptyTopic('Untitled Topic')];
-				const nextActive = nextTopics[0];
+				const nodesById = payload.data.nodes.reduce<Record<string, ContentNode>>((acc, node) => {
+					remoteTopicIdsRef.current.add(node.id);
+					acc[node.id] = node;
+					return acc;
+				}, {});
+				let nextFileSystem: FileSystemState = {
+					rootId: payload.data.rootId,
+					nodesById
+				};
+				let nextFiles = fileSystemToNodes(nextFileSystem).filter((node): node is FileNode => node.type === 'file');
+				if (nextFiles.length === 0) {
+					const fallbackFile = createFileNode(nextFileSystem.rootId, 'Untitled Topic');
+					nextFileSystem = {
+						...nextFileSystem,
+						nodesById: {
+							...nextFileSystem.nodesById,
+							[fallbackFile.id]: fallbackFile
+						}
+					};
+					nextFiles = [fallbackFile];
+					queueSaveNode(fallbackFile);
+				}
+				const nextActiveNode = nextFiles[0];
 				if (!isActive) return;
-				setTopics(nextTopics);
-				setActiveTopicId(nextActive.id);
-				setTopicDrafts(nextTopics.reduce((acc, item) => ({ ...acc, [item.id]: item.title }), {}));
-				setFolderDrafts(nextTopics.reduce((acc, item) => ({ ...acc, [item.id]: item.folder }), {}));
-				resetHistory({ topic: nextActive, cursorIdx: 0, derivIdx: -1 });
+				setFileSystem(nextFileSystem);
+				setActiveTopicId(nextActiveNode.id);
+				setCurrentFolderId(nextActiveNode.parentId ?? nextFileSystem.rootId);
+				setSelectedNodeId(nextActiveNode.id);
+				setExpandedFolderIds({
+					[nextFileSystem.rootId]: true,
+					...getAncestorIds(nextActiveNode.id, nextFileSystem.nodesById).reduce<Record<string, boolean>>((acc, id) => {
+						acc[id] = true;
+						return acc;
+					}, {})
+				});
+				setNodeDrafts(fileSystemToNodes(nextFileSystem).reduce<Record<string, string>>((acc, node) => {
+					if (!node.isRoot) acc[node.id] = node.name;
+					return acc;
+				}, {}));
+				resetHistory({ topic: toTopicFromNode(nextFileSystem, nextActiveNode), cursorIdx: 0, derivIdx: -1 });
 				setIsHydrated(true);
 				setPersistStatus({ state: 'idle', message: 'Ready to save.' });
-				if (normalized.length === 0) queueSaveTopic(nextActive);
 			} catch (error) {
 				console.error('Failed to load topics', error);
 				if (!isActive) return;
@@ -1986,7 +2538,7 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 		return () => {
 			isActive = false;
 		};
-	}, [formatPersistError, isAuthSynced, isHydrated, queueSaveTopic, requestWithAuth, resetHistory, userId, useLocalPersistence]);
+	}, [formatPersistError, isAuthSynced, isHydrated, queueSaveNode, requestWithAuth, resetHistory, userId, useLocalPersistence]);
 
 	useEffect(() => {
 		normalCursorRef.current = normalCursor;
@@ -1994,13 +2546,34 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 
 	useEffect(() => {
 		if (!isHydrated || !useLocalPersistence) return;
-		saveLocalTopics(topics, activeTopicId);
-	}, [topics, activeTopicId, isHydrated, useLocalPersistence]);
+		saveLocalFileSystem(fileSystem, activeTopicId);
+	}, [fileSystem, activeTopicId, isHydrated, useLocalPersistence]);
 
 	useEffect(() => {
 		if (!isHydrated) return;
-		queueSaveTopic(hState.topic);
-	}, [hState.topic, isHydrated, queueSaveTopic]);
+		const existing = getFileNode(fileSystem, activeTopicId);
+		if (!existing || hState.topic.id !== activeTopicId) return;
+		const nextComparableState = {
+			name: sanitizeNodeName(hState.topic.title, 'Untitled Topic'),
+			parentId: hState.topic.parentId ?? fileSystem.rootId,
+			topic: toTopicDocument({ concepts: hState.topic.concepts })
+		};
+		if (stableStringify(nextComparableState) === stableStringify(getComparableFileNodeState(existing))) return;
+		const updatedNode: FileNode = {
+			...existing,
+			...nextComparableState,
+			updated_at: createTimestamp()
+		};
+		setFileSystem(prev => ({
+			...prev,
+			nodesById: {
+				...prev.nodesById,
+				[updatedNode.id]: updatedNode
+			}
+		}));
+		setNodeDrafts(prev => ({ ...prev, [updatedNode.id]: updatedNode.name }));
+		queueSaveNode(updatedNode);
+	}, [activeTopicId, fileSystem, hState.topic, isHydrated, queueSaveNode]);
 
 	useEffect(() => {
 		return () => {
@@ -2014,28 +2587,43 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 	}, [hState]);
 
 	useEffect(() => {
-		setTopics(prev => prev.map(item => (item.id === activeTopicId ? { ...hState.topic } : item)));
-	}, [hState.topic, activeTopicId]);
+		fileSystemRef.current = fileSystem;
+	}, [fileSystem]);
+
+	useEffect(() => {
+		activeTopicIdRef.current = activeTopicId;
+	}, [activeTopicId]);
+
+	useEffect(() => {
+		topicMenuDeletePendingRef.current = topicMenuDeletePending;
+	}, [topicMenuDeletePending]);
 
 	useEffect(() => {
 		topicMenuIndexRef.current = topicMenuIndex;
 	}, [topicMenuIndex]);
 
 	useEffect(() => {
-		if (!isDocumentSwitcherOpen) return;
-		const activeIndex = topics.findIndex(item => item.id === activeTopicId);
+		if (!isDocumentSwitcherOpen) {
+			documentSwitcherWasOpenRef.current = false;
+			return;
+		}
+		const activeIndex = visibleExplorerNodes.findIndex(item => item.node.id === (selectedNodeId ?? activeTopicId));
 		const nextIndex = activeIndex >= 0 ? activeIndex : 0;
 		setTopicMenuIndex(nextIndex);
 		topicMenuIndexRef.current = nextIndex;
-		setTopicMenuEditingTarget(null);
-		setTopicMenuDeletePending(false);
-	}, [isDocumentSwitcherOpen, topics, activeTopicId]);
+		if (!documentSwitcherWasOpenRef.current) {
+			setTopicMenuEditingTarget(null);
+			topicMenuDeletePendingRef.current = false;
+			setTopicMenuDeletePending(false);
+			documentSwitcherWasOpenRef.current = true;
+		}
+	}, [activeTopicId, isDocumentSwitcherOpen, selectedNodeId, visibleExplorerNodeIdsSignature]);
 
 	useEffect(() => {
 		if (!isDocumentSwitcherOpen || !topicMenuEditingTarget) return;
 		const focusInput = () => {
 			const input = document.querySelector<HTMLInputElement>(
-				`[data-testid="topic-${topicMenuEditingTarget.field}-input-${topicMenuEditingTarget.id}"]`
+				`[data-testid="topic-name-input-${topicMenuEditingTarget.id}"]`
 			);
 			if (input) {
 				input.focus();
@@ -2048,7 +2636,7 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 			if (focusInput()) return;
 			setTimeout(focusInput, 50);
 		});
-	}, [isDocumentSwitcherOpen, topicMenuEditingTarget, topics.length]);
+	}, [isDocumentSwitcherOpen, topicMenuEditingTarget, visibleExplorerNodes.length]);
 
 	useEffect(() => {
 		if (mode === 'INSERT') {
@@ -2073,12 +2661,13 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 	}, [normalYankPending]);
 
 	useEffect(() => {
+		if (!hasLoadedClientPrefs) return;
 		try {
-			localStorage.setItem('engram.showKeyBuffer', String(showKeyBuffer));
+			localStorage.setItem(SHOW_KEY_BUFFER_KEY, String(showKeyBuffer));
 		} catch {
 			// ignore storage errors
 		}
-	}, [showKeyBuffer]);
+	}, [hasLoadedClientPrefs, showKeyBuffer]);
 
 	useEffect(() => {
 		let cancelled = false;
@@ -2117,21 +2706,23 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 	}, []);
 
 	useEffect(() => {
+		if (!hasLoadedClientPrefs) return;
 		try {
 			if (selectedWallpaperFilename) localStorage.setItem(WALLPAPER_FILENAME_KEY, selectedWallpaperFilename);
 			else localStorage.removeItem(WALLPAPER_FILENAME_KEY);
 		} catch {
 			// ignore storage errors
 		}
-	}, [selectedWallpaperFilename]);
+	}, [hasLoadedClientPrefs, selectedWallpaperFilename]);
 
 	useEffect(() => {
+		if (!hasLoadedClientPrefs) return;
 		try {
 			localStorage.setItem(WALLPAPER_OPACITY_KEY, String(backgroundOpacity));
 		} catch {
 			// ignore storage errors
 		}
-	}, [backgroundOpacity]);
+	}, [backgroundOpacity, hasLoadedClientPrefs]);
 
 	useEffect(() => {
 		document.body.style.overflow = isAccountOpen ? 'hidden' : '';
@@ -2497,29 +3088,25 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 	};
 
 	const isFocusMode = mode === 'NORMAL' || mode === 'INSERT';
-	const handleTopicMetaInputBlur = (id: string, field: 'title' | 'folder') => {
-		commitTopicMetaDraft(id, [field]);
+	const handleTopicMetaInputBlur = (id: string) => {
+		commitNodeDraft(id);
 		window.setTimeout(() => {
 			const activeTestId = document.activeElement instanceof HTMLInputElement
 				? document.activeElement.dataset.testid || ''
 				: '';
-			const expectedPrefix = field === 'title' ? 'topic-title-input-' : 'topic-folder-input-';
+			const expectedPrefix = 'topic-name-input-';
 			if (activeTestId === `${expectedPrefix}${id}`) return;
-			setTopicMenuEditingTarget(prev => (prev?.id === id && prev.field === field ? null : prev));
+			setTopicMenuEditingTarget(prev => (prev?.id === id ? null : prev));
 		}, 0);
 	};
-
-	const groupedTopics = topics.reduce((acc, item) => {
-		const folder = (item.folder ?? '').trim() || 'Uncategorized';
-		if (!acc[folder]) acc[folder] = [];
-		acc[folder].push(item);
-		return acc;
-	}, {} as Record<string, Topic[]>);
-	const orderedFolders = Object.keys(groupedTopics).sort((a, b) => {
-		if (a === 'Uncategorized') return 1;
-		if (b === 'Uncategorized') return -1;
-		return a.localeCompare(b);
-	});
+	const visibleMoveFolders = [
+		fileSystem.nodesById[fileSystem.rootId] as FolderNode,
+		...(
+			topicMoveTargetId
+				? moveableFolders.filter(folder => !getSubtreeNodeIds(topicMoveTargetId, fileSystem.nodesById).includes(folder.id))
+				: moveableFolders
+		)
+	];
 
 	return (
 		<div className="relative isolate flex flex-col h-screen overflow-hidden bg-[#0d111b] font-sans">
@@ -2549,7 +3136,7 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 						className="text-sm font-bold text-[#c0caf5] drop-shadow-[0_0_12px_rgba(26,27,38,0.9)]"
 						data-testid="topic-title"
 					>
-						{topic.folder ? `${topic.folder}/${topic.title}` : topic.title}
+						{topic.path !== '/' ? `${topic.path}/${topic.title}` : topic.title}
 					</h1>
 					{persistStatus.state !== 'saved' && (
 						<div className="flex items-center gap-2 text-[9px] font-semibold text-[#94a0c6]">
@@ -2655,7 +3242,7 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 											)}
 										</div>
 									</div>
-								</div>
+									</div>
 
 								<div className="ml-10 mt-4 pl-4 border-l border-[#565f89]/30 space-y-3">
 									{concept.derivatives.map((deriv, dIdx) => {
@@ -2765,7 +3352,7 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 											{cursorIdx === cIdx && derivIdx === 0 && <span className="text-[#ff9e64] font-bold">Press &apos;o&apos; to add.</span>}
 										</div>
 									)}
-								</div>
+									</div>
 							</div>
 						);
 					})}
@@ -2817,7 +3404,7 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 										<div className="text-sm font-bold tracking-[0.2em] text-[#cbd3f2]">ACCOUNT</div>
 										<div className="text-sm text-[#94a0c6]">Manage your profile & security</div>
 									</div>
-								</div>
+									</div>
 								<div className="flex items-center gap-2">
 									<button
 										className="text-sm font-bold px-2 py-1 rounded border border-[#5b79d6]/40 text-[#9bb2ff] hover:bg-[#5b79d6]/15 transition"
@@ -3160,128 +3747,231 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 
 			{isDocumentSwitcherOpen && (
 				<div className="fixed inset-0 z-50 flex items-center justify-center bg-[#0b0e17]/80" data-testid="topic-switcher">
-					<div className="w-[min(560px,90vw)] rounded-2xl border border-[#22283a] bg-[#141821] shadow-[0_30px_80px_rgba(6,8,14,0.65)]">
+					<div className="w-[min(760px,94vw)] rounded-2xl border border-[#22283a] bg-[#141821] shadow-[0_30px_80px_rgba(6,8,14,0.65)]">
 						<div className="flex items-center justify-between border-b border-[#1f2536] bg-[#171c28] px-5 py-4">
 								<div>
-									<div className="text-sm font-bold tracking-[0.2em] text-[#cbd3f2]">FOLDERS</div>
-									<div className="text-sm text-[#94a0c6]">Choose a note to open</div>
+									<div className="text-sm font-bold tracking-[0.2em] text-[#cbd3f2]">FILESYSTEM</div>
+									<div className="text-sm text-[#94a0c6]">Explorer-style folders and files</div>
 								</div>
 								<button
 									className="text-sm font-bold px-2 py-1 rounded border border-[#5b79d6]/40 text-[#9bb2ff] hover:bg-[#5b79d6]/15 transition"
 								data-testid="topic-close"
-								onClick={() => { setIsDocumentSwitcherOpen(false); setTopicMenuEditingTarget(null); }}
+								onClick={() => {
+									topicMenuDeletePendingRef.current = false;
+									setTopicMenuDeletePending(false);
+									setIsDocumentSwitcherOpen(false);
+									setTopicMenuEditingTarget(null);
+								}}
 							>
 								CLOSE
 							</button>
 						</div>
-						<div className="p-5 space-y-4">
+						<section className="relative p-5 space-y-4">
 								<div className="flex items-center justify-between">
 									<div>
 										<div className="text-sm font-bold text-[#cbd3f2]">Current note</div>
-										<div className="mt-1 text-sm text-[#7aa2f7]">{topic.folder || 'Uncategorized'}</div>
+										<div className="mt-1 text-sm text-[#7aa2f7]">{topic.path}</div>
 										<div className="text-base text-[#94a0c6]">{topic.title}</div>
 									</div>
-									<button
-										className="text-sm font-bold px-2 py-1 rounded border border-[#7aa2f7]/40 text-[#9bb2ff] hover:bg-[#5b79d6]/15 transition"
-									data-testid="topic-create"
-									onClick={createTopic}
-								>
-									NEW NOTE
-								</button>
-							</div>
+									<div className="flex items-center gap-2">
+										<button
+											className="text-sm font-bold px-2 py-1 rounded border border-[#7aa2f7]/40 text-[#9bb2ff] hover:bg-[#5b79d6]/15 transition"
+											data-testid="topic-create"
+											onClick={createTopic}
+										>
+											NEW NOTE
+										</button>
+										<button
+											className="text-sm font-bold px-2 py-1 rounded border border-[#2a3350] text-[#9bb2ff] hover:bg-[#2a3350]/30 transition"
+											onClick={createFolder}
+										>
+											NEW FOLDER
+										</button>
+									</div>
+								</div>
 								<div className="rounded-lg border border-[#22283a] bg-[#161b27] px-3 py-2 text-sm text-[#94a0c6]">
-									{topicMenuEditingTarget ? (
-										<span><span className="font-bold text-[#cbd3f2]">Editing:</span> Esc finish, Enter open</span>
+									{topicMoveTargetId ? (
+										<span><span className="font-bold text-[#cbd3f2]">Move:</span> j/k choose folder, Enter confirm, Esc cancel</span>
+									) : topicMenuEditingTarget ? (
+										<span><span className="font-bold text-[#cbd3f2]">Editing:</span> Esc cancel, Enter save</span>
+									) : topicMenuDeletePending ? (
+										<span><span className="font-bold text-[#ff9e64]">Delete armed:</span> press <span className="rounded border border-[#ff9e64]/50 bg-[#2a1d18] px-1.5 py-0.5 font-bold text-[#ffb08a]">d</span> again to delete, or any other key to cancel</span>
 									) : (
-										<span><span className="font-bold text-[#cbd3f2]">Keys:</span> j/k move, o new, c edit title, f edit folder, Enter/l open, dd delete, u undo, Esc close</span>
+										<span><span className="font-bold text-[#cbd3f2]">Keys:</span> j/k move, h collapse, l/Enter expand or open, o new file, O new folder, c rename, f move, dd delete, u undo</span>
 									)}
 								</div>
-							<div className="space-y-3" data-testid="topic-list">
-								{orderedFolders.map(folder => (
-									<div key={folder} className="space-y-2">
-											<div className="text-sm font-bold tracking-[0.08em] text-[#7aa2f7]">{folder}</div>
-											{groupedTopics[folder].map(item => {
-												const index = topics.findIndex(topicItem => topicItem.id === item.id);
-												const isEditingTitle = item.id === topicMenuEditingTarget?.id && topicMenuEditingTarget.field === 'title';
-												const isEditingFolder = item.id === topicMenuEditingTarget?.id && topicMenuEditingTarget.field === 'folder';
-												return (
-													<div
-														key={item.id}
-													data-testid={`topic-item-${item.id}`}
-													data-selected={topics[topicMenuIndex]?.id === item.id}
-													className={`flex items-center gap-2 rounded-lg border px-3 py-2 ${item.id === activeTopicId ? 'border-[#7aa2f7]/60 bg-[#1b2131]' : 'border-[#22283a] bg-[#161b27]'} ${topics[topicMenuIndex]?.id === item.id ? 'ring-1 ring-[#ff9e64] shadow-[0_0_10px_rgba(255,158,100,0.3)]' : ''}`}
+								<div className="space-y-2" data-testid="topic-list">
+									{visibleExplorerNodes.length === 0 && (
+										<div className="rounded-lg border border-dashed border-[#2a3350] bg-[#101521] px-4 py-5 text-sm text-[#7f8bb4]">
+											No files yet.
+										</div>
+									)}
+									{visibleExplorerNodes.map(({ node: item, depth }, index) => {
+										const isEditingName = item.id === topicMenuEditingTarget?.id;
+										const isSelected = visibleExplorerNodes[topicMenuIndex]?.node.id === item.id;
+										const isFolder = item.type === 'folder';
+										const isExpanded = isFolder ? (expandedFolderIds[item.id] ?? false) : false;
+										const isCurrentFolder = currentFolderId === item.id;
+										return (
+											<div
+												key={item.id}
+												data-testid={`topic-item-${item.id}`}
+												data-selected={isSelected}
+												className={`flex items-center gap-3 rounded-lg border px-3 py-2 ${item.id === activeTopicId || isCurrentFolder ? 'border-[#7aa2f7]/60 bg-[#1b2131]' : 'border-[#22283a] bg-[#161b27]'} ${isSelected ? 'ring-1 ring-[#ff9e64] shadow-[0_0_10px_rgba(255,158,100,0.3)]' : ''}`}
+												onClick={() => {
+													setTopicMenuIndex(index);
+													topicMenuIndexRef.current = index;
+													setSelectedNodeId(item.id);
+													setCurrentFolderId(isFolder ? item.id : (item.parentId ?? fileSystem.rootId));
+												}}
+											>
+												<button
+													type="button"
+													className="shrink-0 text-xs font-bold text-[#7aa2f7]"
+													style={{ marginLeft: `${depth * 18}px` }}
+													onClick={(event) => {
+														event.stopPropagation();
+														if (!isFolder) return;
+														setExpandedFolderIds(prev => ({ ...prev, [item.id]: !isExpanded }));
+														setCurrentFolderId(item.id);
+														setSelectedNodeId(item.id);
+													}}
 												>
-														<div className={`w-full ${isEditingFolder ? 'space-y-1.5' : 'space-y-0'}`}>
+													{isFolder ? (isExpanded ? '▾' : '▸') : '·'}
+												</button>
+												<ExplorerNodeIcon type={item.type} />
+												<div className="min-w-0 flex-1">
+													{isEditingName ? (
 														<input
-															className="flex-1 bg-transparent text-base text-[#c0caf5] outline-none"
-															value={topicDrafts[item.id] ?? item.title}
-															data-testid={`topic-title-input-${item.id}`}
-															autoFocus={isEditingTitle}
-															onChange={(e) => updateTopicMeta(item.id, { title: e.target.value })}
-														onFocus={() => { setTopicMenuEditingTarget({ id: item.id, field: 'title' }); setTopicMenuIndex(index); }}
-														onBlur={() => handleTopicMetaInputBlur(item.id, 'title')}
-														onKeyDown={(e) => {
-														if (e.key === 'Escape') {
-															e.preventDefault();
-															setTopicMenuEditingTarget(null);
-															(e.currentTarget as HTMLInputElement).blur();
-															return;
-														}
-														if (e.key === 'Enter') {
-															e.preventDefault();
-															openTopic(item.id);
-														}
-														}}
-															placeholder="Untitled Topic"
-														/>
-														{isEditingFolder && (
-															<input
-																className="flex-1 bg-transparent text-sm text-[#94a0c6] outline-none"
-																value={folderDrafts[item.id] ?? item.folder}
-																data-testid={`topic-folder-input-${item.id}`}
-																autoFocus={isEditingFolder}
-																onChange={(e) => updateTopicMeta(item.id, { folder: e.target.value })}
-															onFocus={() => { setTopicMenuEditingTarget({ id: item.id, field: 'folder' }); setTopicMenuIndex(index); }}
-															onBlur={() => handleTopicMetaInputBlur(item.id, 'folder')}
-																onKeyDown={(e) => {
+															className="w-full bg-transparent text-base text-[#c0caf5] outline-none"
+															value={nodeDrafts[item.id] ?? item.name}
+															data-testid={`topic-name-input-${item.id}`}
+															autoFocus
+															onChange={(e) => syncNodeDraft(item.id, e.target.value)}
+															onFocus={() => {
+																setTopicMenuEditingTarget({ id: item.id, field: 'name' });
+																setTopicMenuIndex(index);
+																topicMenuIndexRef.current = index;
+																setSelectedNodeId(item.id);
+															}}
+															onBlur={() => handleTopicMetaInputBlur(item.id)}
+															onKeyDown={(e) => {
 																if (e.key === 'Escape') {
 																	e.preventDefault();
+																	syncNodeDraft(item.id, item.name);
 																	setTopicMenuEditingTarget(null);
 																	(e.currentTarget as HTMLInputElement).blur();
 																	return;
 																}
 																if (e.key === 'Enter') {
 																	e.preventDefault();
-																	openTopic(item.id);
+																	if (!isFolder) openTopic(item.id);
+																	else {
+																		commitNodeDraft(item.id);
+																		setTopicMenuEditingTarget(null);
+																	}
 																}
 															}}
-																placeholder="Folder"
-															/>
-														)}
-													</div>
-														<button
-															className="text-sm font-bold px-2 py-1 rounded border border-[#5b79d6]/40 text-[#9bb2ff] hover:bg-[#5b79d6]/15 transition"
-														data-testid={`topic-open-${item.id}`}
-														onClick={() => openTopic(item.id)}
-													>
-														OPEN
-													</button>
-														<button
-															className="text-sm font-bold px-2 py-1 rounded border border-[#f27a93]/40 text-[#ff9aaa] hover:bg-[#f27a93]/15 transition"
-														data-testid={`topic-delete-${item.id}`}
-														onClick={() => deleteTopic(item.id)}
-													>
-														DELETE
-													</button>
+															placeholder={isFolder ? 'Untitled Folder' : 'Untitled Topic'}
+														/>
+													) : (
+														<div
+															className="truncate text-base text-[#c0caf5]"
+															onDoubleClick={() => {
+																setTopicMenuEditingTarget({ id: item.id, field: 'name' });
+																setTopicMenuIndex(index);
+																topicMenuIndexRef.current = index;
+																setSelectedNodeId(item.id);
+															}}
+														>
+															{nodeDrafts[item.id] ?? item.name}
+														</div>
+													)}
+													{!isFolder && (
+														<div className="truncate text-sm text-[#7f8bb4]">
+															{getTopicPreview(item.topic)}
+														</div>
+													)}
 												</div>
-											);
-										})}
-									</div>
-								))}
-							</div>
+												<button
+													className="text-sm font-bold px-2 py-1 rounded border border-[#2a3350] text-[#9bb2ff] hover:bg-[#2a3350]/30 transition"
+													onClick={() => {
+														if (isFolder) {
+															setCurrentFolderId(item.id);
+															setExpandedFolderIds(prev => ({ ...prev, [item.id]: !isExpanded }));
+															setSelectedNodeId(item.id);
+														} else {
+															openTopic(item.id);
+														}
+													}}
+													data-testid={`topic-open-${item.id}`}
+												>
+													{isFolder ? (isExpanded ? 'COLLAPSE' : 'EXPAND') : 'OPEN'}
+												</button>
+												<button
+													className="text-sm font-bold px-2 py-1 rounded border border-[#5b79d6]/40 text-[#9bb2ff] hover:bg-[#5b79d6]/15 transition"
+													onClick={() => {
+														setTopicMoveTargetId(item.id);
+														setTopicMoveFolderIndex(0);
+													}}
+												>
+													MOVE
+												</button>
+												<button
+													className="text-sm font-bold px-2 py-1 rounded border border-[#f27a93]/40 text-[#ff9aaa] hover:bg-[#f27a93]/15 transition"
+													data-testid={`topic-delete-${item.id}`}
+													onClick={() => deleteTopic(item.id)}
+												>
+													DELETE
+												</button>
+											</div>
+										);
+									})}
+								</div>
+								{topicMoveTargetId && (
+									<div className="absolute inset-5 z-10 rounded-2xl border border-[#2a3350] bg-[#0f1420]/95 p-4 shadow-[0_20px_50px_rgba(0,0,0,0.45)] backdrop-blur">
+										<div className="flex items-center justify-between">
+											<div>
+												<div className="text-sm font-bold tracking-[0.14em] text-[#cbd3f2]">MOVE ITEM</div>
+												<div className="text-sm text-[#94a0c6]">Select a destination folder.</div>
+											</div>
+											<button
+												className="rounded border border-[#2a3350] px-2 py-1 text-sm font-bold text-[#9bb2ff] hover:bg-[#2a3350]/30"
+												onClick={() => setTopicMoveTargetId(null)}
+											>
+												CANCEL
+											</button>
+										</div>
+										<div className="mt-4 space-y-2">
+											{visibleMoveFolders.map((folder, index) => (
+												<button
+													key={folder.id}
+													type="button"
+													className={`flex w-full items-center justify-between rounded-lg border px-3 py-2 text-left ${topicMoveFolderIndex === index ? 'border-[#7aa2f7]/60 bg-[#1b2131] text-[#cbd3f2]' : 'border-[#22283a] bg-[#141821] text-[#94a0c6]'}`}
+													onClick={() => setTopicMoveFolderIndex(index)}
+													onDoubleClick={() => moveNodeToFolder(topicMoveTargetId, folder.id)}
+												>
+													<span>{folder.isRoot ? 'Root' : folder.name}</span>
+													<span className="text-xs text-[#6f7ca8]">{folder.isRoot ? '/' : getNodePath(folder.id, fileSystem.nodesById)}</span>
+												</button>
+											))}
+										</div>
+										<div className="mt-4 flex justify-end">
+											<button
+												className="rounded border border-[#7aa2f7]/40 px-3 py-1.5 text-sm font-bold text-[#9bb2ff] hover:bg-[#5b79d6]/15"
+												onClick={() => {
+													const destination = visibleMoveFolders[topicMoveFolderIndex];
+													if (destination && topicMoveTargetId) moveNodeToFolder(topicMoveTargetId, destination.id);
+												}}
+											>
+												MOVE HERE
+											</button>
+										</div>
+										</div>
+									)}
+						</section>
 						</div>
 					</div>
-				</div>
 			)}
 		</div>
 	);

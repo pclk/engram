@@ -1,46 +1,64 @@
 import { z } from 'zod';
-import {
-	topicContentSchema,
-	topicTransportSchema,
-	toTopicContent,
-	toTopicTransport
-} from '@/lib/schemas/topic';
+import { contentNodeSchema } from '@/lib/schemas/filesystem';
+import { topicContentSchema, topicDocumentSchema, toTopicDocument } from '@/lib/schemas/topic';
 
-export { topicContentSchema, topicTransportSchema, toTopicContent, toTopicTransport };
+export { contentNodeSchema, topicContentSchema, topicDocumentSchema, toTopicDocument };
 
-export const contentUpsertRequestSchema = z.object({
-	id: z.string().uuid().optional(),
-	title: z.string().min(1).max(200),
-	topic: topicContentSchema
-});
+const nodeNameSchema = z.string().min(1).max(200);
+
+export const contentUpsertRequestSchema = z.discriminatedUnion('type', [
+	z.object({
+		id: z.string().uuid().optional(),
+		type: z.literal('file'),
+		name: nodeNameSchema,
+		parentId: z.string().uuid(),
+		topic: topicDocumentSchema
+	}),
+	z.object({
+		id: z.string().uuid().optional(),
+		type: z.literal('folder'),
+		name: nodeNameSchema,
+		parentId: z.string().uuid()
+	})
+]);
+
+export const contentUpdateRequestSchema = z.discriminatedUnion('type', [
+	z.object({
+		id: z.string().uuid(),
+		type: z.literal('file'),
+		name: nodeNameSchema,
+		parentId: z.string().uuid(),
+		topic: topicDocumentSchema
+	}),
+	z.object({
+		id: z.string().uuid(),
+		type: z.literal('folder'),
+		name: nodeNameSchema,
+		parentId: z.string().uuid()
+	})
+]);
 
 export const contentDeleteRequestSchema = z.object({
 	id: z.string().uuid()
 });
 
-export const contentRowSchema = z.object({
-	id: z.string().uuid(),
-	title: z.string(),
-	topic: topicContentSchema,
-	created_at: z.string().datetime().optional(),
-	updated_at: z.string().datetime().optional()
-});
-
 export const listContentResponseSchema = z.object({
 	data: z.object({
-		topics: z.array(contentRowSchema)
+		rootId: z.string().uuid(),
+		nodes: z.array(contentNodeSchema)
 	})
 });
 
 export const upsertContentResponseSchema = z.object({
 	data: z.object({
-		topic: contentRowSchema
+		node: contentNodeSchema
 	})
 });
 
 export const deleteContentResponseSchema = z.object({
 	data: z.object({
 		id: z.string().uuid(),
-		deleted: z.boolean()
+		deleted: z.boolean(),
+		deletedIds: z.array(z.string().uuid())
 	})
 });

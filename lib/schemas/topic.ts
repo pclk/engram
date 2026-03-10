@@ -14,36 +14,69 @@ export const conceptSchema = z.object({
 	derivatives: z.array(derivativeSchema)
 });
 
+export const topicDocumentSchema = z.object({
+	concepts: z.array(conceptSchema).min(1)
+});
+
+const legacyTopicContentSchema = z.object({
+	id: z.string().optional(),
+	title: z.string().optional(),
+	folder: z.string().optional().default(''),
+	concepts: z.array(conceptSchema).min(1)
+});
+
 export const topicContentSchema = z.object({
 	id: z.string().min(1),
 	title: z.string().min(1),
-	folder: z.string().default(''),
+	parentId: z.string().nullable(),
+	path: z.string(),
 	concepts: z.array(conceptSchema).min(1)
 });
 
 export const topicTransportSchema = z.object({
 	id: z.string().uuid(),
-	title: z.string(),
-	topic: topicContentSchema,
+	name: z.string(),
+	parentId: z.string().uuid().nullable(),
+	path: z.string(),
+	topic: topicDocumentSchema,
 	updatedAt: z.string().datetime()
 });
 
 export type DerivativeType = z.infer<typeof derivativeTypeSchema>;
 export type Derivative = z.infer<typeof derivativeSchema>;
 export type Concept = z.infer<typeof conceptSchema>;
+export type TopicDocument = z.infer<typeof topicDocumentSchema>;
 export type TopicContent = z.infer<typeof topicContentSchema>;
 export type TopicTransport = z.infer<typeof topicTransportSchema>;
 
+export const toTopicDocument = (topic: unknown): TopicDocument => {
+	const parsed = legacyTopicContentSchema.safeParse(topic);
+	if (parsed.success) {
+		return topicDocumentSchema.parse({
+			concepts: parsed.data.concepts
+		});
+	}
+
+	return topicDocumentSchema.parse(topic);
+};
+
+export const toLegacyFolder = (topic: unknown) => {
+	const parsed = legacyTopicContentSchema.safeParse(topic);
+	return parsed.success ? parsed.data.folder ?? '' : '';
+};
+
 export const toTopicTransport = (row: {
 	id: string;
-	title: string;
+	name: string;
+	parentId: string | null;
+	path: string;
 	topic: unknown;
 	updatedAt: Date | string;
 }): TopicTransport => topicTransportSchema.parse({
 	id: row.id,
-	title: row.title,
-	topic: topicContentSchema.parse(row.topic),
+	name: row.name,
+	parentId: row.parentId,
+	path: row.path,
+	topic: toTopicDocument(row.topic),
 	updatedAt: row.updatedAt instanceof Date ? row.updatedAt.toISOString() : row.updatedAt
 });
-
-export const toTopicContent = (topic: unknown): TopicContent => topicContentSchema.parse(topic);

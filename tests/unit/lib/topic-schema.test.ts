@@ -6,7 +6,8 @@ describe('topicContentSchema', () => {
 		const parsed = topicContentSchema.parse({
 			id: 'topic-1',
 			title: 'Cardiology',
-			folder: '',
+			parentId: '11111111-1111-4111-8111-111111111111',
+			path: '/Work',
 			concepts: [
 				{
 					id: 'concept-1',
@@ -23,7 +24,8 @@ describe('topicContentSchema', () => {
 		const result = topicContentSchema.safeParse({
 			id: '',
 			title: '',
-			folder: null,
+			parentId: null,
+			path: '/',
 			concepts: []
 		});
 
@@ -35,11 +37,10 @@ describe('toTopicTransport', () => {
 	it('adapts database rows into the canonical API transport contract', () => {
 		const parsed = toTopicTransport({
 			id: '4a0f9f3b-5f30-4d37-ae8f-13a6d5f1831a',
-			title: 'Cardiology',
+			name: 'Cardiology',
+			parentId: '11111111-1111-4111-8111-111111111111',
+			path: '/Work/Cardiology',
 			topic: {
-				id: 'topic-1',
-				title: 'Cardiology',
-				folder: '',
 				concepts: [{ id: 'concept-1', text: 'Heart', derivatives: [] }]
 			},
 			updatedAt: new Date('2026-01-01T00:00:00.000Z')
