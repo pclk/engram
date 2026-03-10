@@ -130,11 +130,17 @@ const tokenFromRequest = async (request: Request): Promise<string | null> => {
 	return normalizeToken(cookieStore.get(SESSION_COOKIE_NAME)?.value);
 };
 
+export const getSessionFromRequest = async (request: Request): Promise<SessionRecord> => {
+	const token = await tokenFromRequest(request);
+	if (!token) return null;
+	return getSessionByToken(token);
+};
+
 export const requireAuth = async (request: Request): Promise<{ ok: true; auth: AuthContext } | { ok: false; response: Response }> => {
 	const token = await tokenFromRequest(request);
 	if (!token) return { ok: false, response: errorResponse(401, 'Unauthorized.') };
 
-	const session = await getSessionByToken(token);
+	const session = await getSessionFromRequest(request);
 	if (!session) return { ok: false, response: errorResponse(401, 'Invalid session.') };
 
 	return {

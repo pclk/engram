@@ -1,6 +1,6 @@
 import { cookies } from 'next/headers';
 import { z } from 'zod';
-import { SESSION_COOKIE_NAME, clearSessionCookie, deleteSessionByToken, getCurrentSession, getSessionByToken, requireAuth, setSessionCookie, serializeSession, serializeUser } from '@/src/server/api/auth';
+import { SESSION_COOKIE_NAME, clearSessionCookie, deleteSessionByToken, getSessionByToken, getSessionFromRequest, requireAuth, setSessionCookie, serializeSession, serializeUser } from '@/src/server/api/auth';
 import { errorResponse, parseJson } from '@/src/server/api/http';
 
 const upsertSessionSchema = z.object({
@@ -11,7 +11,7 @@ export async function GET(request: Request) {
   const authResult = await requireAuth(request);
   if (!authResult.ok) return authResult.response;
 
-  const session = await getCurrentSession();
+  const session = await getSessionFromRequest(request);
   if (!session) return errorResponse(401, 'Invalid session.');
 
   return Response.json({
