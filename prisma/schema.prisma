@@ -6,12 +6,34 @@ generator client {
 datasource db {
   provider  = "postgresql"
   url       = env("DATABASE_URL")
-  directUrl = env("DIRECT_URL")
 }
 
-model EngramTopic {
+enum EngramNodeType {
+  file
+  folder
+}
+
+model EngramNode {
   id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  // Local application user UUID
+  ownerId   String   @map("owner_id") @db.Uuid
+  parentId  String?  @map("parent_id") @db.Uuid
+  type      EngramNodeType
+  name      String
+  topic     Json?
+  isRoot    Boolean  @default(false) @map("is_root")
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+  parent    EngramNode? @relation("EngramNodeTree", fields: [parentId], references: [id], onDelete: Cascade)
+  children  EngramNode[] @relation("EngramNodeTree")
+
+  @@index([ownerId], map: "engram_nodes_owner_id_idx")
+  @@index([ownerId, parentId], map: "engram_nodes_owner_id_parent_id_idx")
+  @@index([ownerId, type], map: "engram_nodes_owner_id_type_idx")
+  @@map("engram_nodes")
+}
+
+model LegacyEngramTopic {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   ownerId   String   @map("owner_id") @db.Uuid
   title     String
   topic     Json

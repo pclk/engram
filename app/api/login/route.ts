@@ -1,6 +1,5 @@
-import { z } from 'zod';
 import { loginInputSchema, loginWithPassword } from '@/lib/server/auth-service';
-import { createSession, serializeSession, serializeUser, setSessionCookie } from '@/src/server/api/auth';
+import { serializeSession, serializeUser, setSessionCookie } from '@/src/server/api/auth';
 import { errorResponse, parseJson } from '@/src/server/api/http';
 
 const loginSchema = loginInputSchema;

@@ -1,254 +1,317 @@
 :root {
-	--background: #1a1b26;
-	--foreground: #c0caf5;
-	--card: #24283b;
-	--card-foreground: #c0caf5;
-	--popover: #16161e;
-	--popover-foreground: #c0caf5;
-	--primary: #7aa2f7;
-	--primary-foreground: #1a1b26;
-	--secondary: #292e42;
-	--secondary-foreground: #c0caf5;
-	--muted: #1f2335;
-	--muted-foreground: #a9b1d6;
-	--accent: #bb9af7;
-	--accent-foreground: #1a1b26;
-	--destructive: #f7768e;
-	--destructive-foreground: #1a1b26;
-	--border: #2a2f45;
-	--input: #2a2f45;
-	--ring: #7aa2f7;
-	--neon-radius: 0.8rem;
+  --background: #1a1b26;
+  --foreground: #c0caf5;
+  --card: #24283b;
+  --card-foreground: #c0caf5;
+  --popover: #16161e;
+  --popover-foreground: #c0caf5;
+  --primary: #7aa2f7;
+  --primary-foreground: #1a1b26;
+  --secondary: #292e42;
+  --secondary-foreground: #c0caf5;
+  --muted: #1f2335;
+  --muted-foreground: #a9b1d6;
+  --accent: #bb9af7;
+  --accent-foreground: #1a1b26;
+  --destructive: #f7768e;
+  --destructive-foreground: #1a1b26;
+  --border: #2a2f45;
+  --input: #2a2f45;
+  --ring: #7aa2f7;
+  --neon-radius: 0.8rem;
 }
 
 .neon-auth-page {
-	min-height: 100vh;
-	background: #1a1b26;
-	color: #c0caf5;
-	display: flex;
-	align-items: center;
-	justify-content: center;
-	padding: 2.5rem 1.5rem;
-	font-family: 'JetBrains Mono', monospace;
+  min-height: 100vh;
+  background: #1a1b26;
+  color: #c0caf5;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2.5rem 1.5rem;
+  font-family: "JetBrains Mono", monospace;
 }
 
 .neon-auth-card {
-	width: min(420px, 92vw);
-	padding: 1.75rem 1.5rem 2rem;
-	background: #24283b;
-	border: 1px solid #2a2f45;
-	border-radius: 1rem;
-	box-shadow: 0 20px 60px rgba(0, 0, 0, 0.45);
+  width: min(420px, 92vw);
+  padding: 1.75rem 1.5rem 2rem;
+  background: #24283b;
+  border: 1px solid #2a2f45;
+  border-radius: 1rem;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.45);
 }
 
 .neon-auth-brand {
-	display: flex;
-	align-items: center;
-	gap: 0.75rem;
-	margin-bottom: 1.25rem;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-bottom: 1.25rem;
 }
 
 .neon-auth-brand-badge {
-	width: 6rem;
-	height: 1.5rem;
-	border-radius: 0.25rem;
-	object-fit: contain;
-	background: #1f2335;
-	padding: 0.2rem;
+  width: 6rem;
+  height: 1.5rem;
+  border-radius: 0.25rem;
+  object-fit: contain;
+  background: #1f2335;
+  padding: 0.2rem;
 }
 
 .neon-auth-brand h1 {
-	font-size: 0.95rem;
-	font-weight: 700;
-	letter-spacing: 0.08em;
-	text-transform: uppercase;
-	margin: 0;
+  font-size: 0.95rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  margin: 0;
 }
 
 .neon-auth-brand p {
-	margin: 0.15rem 0 0;
-	font-size: 0.7rem;
-	color: #a9b1d6;
-	letter-spacing: 0.06em;
+  margin: 0.15rem 0 0;
+  font-size: 0.7rem;
+  color: #a9b1d6;
+  letter-spacing: 0.06em;
 }
 
 .neon-auth-root,
 .neon-auth-root * {
-	font-family: 'JetBrains Mono', monospace;
+  font-family: "JetBrains Mono", monospace;
 }
 
 .neon-auth-root button {
-	border-radius: 0.75rem !important;
-	font-weight: 600 !important;
-	letter-spacing: 0.04em;
+  border-radius: 0.75rem !important;
+  font-weight: 600 !important;
+  letter-spacing: 0.04em;
 }
 
 .neon-auth-root [data-slot="card-description"] {
-	color: #94a0c6;
+  color: #94a0c6;
 }
 
 .neon-auth-root input,
 .neon-auth-root textarea {
-	background: #1f2335 !important;
-	border-color: #2a2f45 !important;
-	color: #c0caf5 !important;
+  background: #1f2335 !important;
+  border-color: #2a2f45 !important;
+  color: #c0caf5 !important;
 }
 
 /* Hide built-in browser password reveal to keep custom icon */
 .neon-auth-root input[type="password"]::-ms-reveal,
 .neon-auth-root input[type="password"]::-ms-clear {
-	display: none;
+  display: none;
 }
 
 .neon-auth-root input[type="password"]::-webkit-credentials-auto-fill-button {
-	visibility: hidden;
+  visibility: hidden;
 }
 
 .neon-auth-links {
-	margin-top: 1.25rem;
-	display: flex;
-	justify-content: center;
-	gap: 0.6rem;
-	font-size: 0.7rem;
-	color: #a9b1d6;
-	letter-spacing: 0.05em;
+  margin-top: 1.25rem;
+  display: flex;
+  justify-content: center;
+  gap: 0.6rem;
+  font-size: 0.7rem;
+  color: #a9b1d6;
+  letter-spacing: 0.05em;
 }
 
 .neon-auth-links a {
-	color: #7aa2f7;
-	text-decoration: none;
+  color: #7aa2f7;
+  text-decoration: none;
 }
 
 .neon-auth-links a:hover {
-	color: #bb9af7;
+  color: #bb9af7;
 }
 
 .neon-auth-panel h2 {
-	margin: 0 0 1rem;
-	font-size: 0.82rem;
-	font-weight: 700;
-	letter-spacing: 0.07em;
-	text-transform: uppercase;
+  margin: 0 0 1rem;
+  font-size: 0.82rem;
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
 }
 
 .neon-auth-form {
-	display: flex;
-	flex-direction: column;
-	gap: 0.7rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.7rem;
 }
 
 .neon-auth-field {
-	display: flex;
-	flex-direction: column;
-	gap: 0.35rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
 }
 
 .neon-auth-field span {
-	font-size: 0.66rem;
-	letter-spacing: 0.05em;
-	color: #9aa5cd;
-	text-transform: uppercase;
+  font-size: 0.66rem;
+  letter-spacing: 0.05em;
+  color: #9aa5cd;
+  text-transform: uppercase;
 }
 
 .neon-auth-field input {
-	border: 1px solid #2a2f45;
-	border-radius: 0.7rem;
-	background: #1f2335;
-	color: #c0caf5;
-	padding: 0.6rem 0.7rem;
-	font-size: 0.82rem;
-	outline: none;
+  border: 1px solid #2a2f45;
+  border-radius: 0.7rem;
+  background: #1f2335;
+  color: #c0caf5;
+  padding: 0.6rem 0.7rem;
+  font-size: 0.82rem;
+  outline: none;
 }
 
 .neon-auth-field input:focus {
-	border-color: #7aa2f7;
-	box-shadow: 0 0 0 2px rgba(122, 162, 247, 0.15);
+  border-color: #7aa2f7;
+  box-shadow: 0 0 0 2px rgba(122, 162, 247, 0.15);
 }
 
 .neon-auth-button {
-	margin-top: 0.2rem;
-	border: 1px solid #7aa2f7;
-	border-radius: 0.72rem;
-	background: #7aa2f7;
-	color: #1a1b26;
-	padding: 0.62rem 0.75rem;
-	font-size: 0.78rem;
-	font-weight: 700;
-	letter-spacing: 0.04em;
-	cursor: pointer;
+  margin-top: 0.2rem;
+  border: 1px solid #7aa2f7;
+  border-radius: 0.72rem;
+  background: #7aa2f7;
+  color: #1a1b26;
+  padding: 0.62rem 0.75rem;
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  cursor: pointer;
 }
 
 .neon-auth-button:disabled {
-	opacity: 0.6;
-	cursor: not-allowed;
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.neon-auth-alt-action {
+  margin-top: 1rem;
+  padding-top: 1rem;
+  border-top: 1px solid #2a2f45;
+}
+
+.neon-auth-alt-label {
+  margin: 0 0 0.5rem;
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #9aa5cd;
+}
+
+.neon-auth-guest-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  border: 1px solid #9ece6a;
+  border-radius: 0.72rem;
+  background: linear-gradient(
+    135deg,
+    rgba(158, 206, 106, 0.22),
+    rgba(122, 162, 247, 0.14)
+  );
+  color: #d6f7b5;
+  padding: 0.72rem 0.9rem;
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-decoration: none;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  transition:
+    transform 120ms ease,
+    border-color 120ms ease,
+    background 120ms ease;
+}
+
+.neon-auth-guest-button:hover {
+  transform: translateY(-1px);
+  border-color: #c3e88d;
+  background: linear-gradient(
+    135deg,
+    rgba(158, 206, 106, 0.3),
+    rgba(122, 162, 247, 0.2)
+  );
+}
+
+.neon-auth-guest-button:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(158, 206, 106, 0.18);
+}
+
+.neon-auth-alt-copy {
+  margin: 0.55rem 0 0;
+  font-size: 0.68rem;
+  line-height: 1.5;
+  color: #9aa5cd;
+  letter-spacing: 0.02em;
 }
 
 .neon-auth-note {
-	margin: 0.85rem 0 0;
-	font-size: 0.7rem;
-	color: #9aa5cd;
-	letter-spacing: 0.03em;
+  margin: 0.85rem 0 0;
+  font-size: 0.7rem;
+  color: #9aa5cd;
+  letter-spacing: 0.03em;
 }
 
 .neon-auth-note a {
-	color: #7aa2f7;
-	text-decoration: none;
+  color: #7aa2f7;
+  text-decoration: none;
 }
 
 .neon-auth-note a:hover {
-	color: #bb9af7;
+  color: #bb9af7;
 }
 
 .neon-auth-status {
-	margin: 0.8rem 0 0;
-	font-size: 0.7rem;
-	letter-spacing: 0.03em;
+  margin: 0.8rem 0 0;
+  font-size: 0.7rem;
+  letter-spacing: 0.03em;
 }
 
 .neon-auth-status--success {
-	color: #9ece6a;
+  color: #9ece6a;
 }
 
 .neon-auth-status--error {
-	color: #f7768e;
+  color: #f7768e;
 }
 
 .neon-auth-debug {
-	margin-top: 1rem;
-	padding-top: 1rem;
-	border-top: 1px solid #2a2f45;
+  margin-top: 1rem;
+  padding-top: 1rem;
+  border-top: 1px solid #2a2f45;
 }
 
 .neon-auth-debug h3 {
-	margin: 0 0 0.75rem;
-	font-size: 0.68rem;
-	font-weight: 700;
-	letter-spacing: 0.08em;
-	text-transform: uppercase;
-	color: #9aa5cd;
+  margin: 0 0 0.75rem;
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #9aa5cd;
 }
 
 .neon-auth-debug-entry + .neon-auth-debug-entry {
-	margin-top: 0.75rem;
+  margin-top: 0.75rem;
 }
 
 .neon-auth-debug-entry p {
-	margin: 0 0 0.3rem;
-	font-size: 0.65rem;
-	color: #7aa2f7;
-	letter-spacing: 0.04em;
+  margin: 0 0 0.3rem;
+  font-size: 0.65rem;
+  color: #7aa2f7;
+  letter-spacing: 0.04em;
 }
 
 .neon-auth-debug-entry pre {
-	margin: 0;
-	padding: 0.65rem;
-	border: 1px solid #2a2f45;
-	border-radius: 0.65rem;
-	background: #16161e;
-	color: #c0caf5;
-	font-size: 0.66rem;
-	line-height: 1.45;
-	white-space: pre-wrap;
-	word-break: break-word;
-	overflow-x: auto;
+  margin: 0;
+  padding: 0.65rem;
+  border: 1px solid #2a2f45;
+  border-radius: 0.65rem;
+  background: #16161e;
+  color: #c0caf5;
+  font-size: 0.66rem;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-x: auto;
 }
