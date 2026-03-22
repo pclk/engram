@@ -403,3 +403,7 @@ The previous README content in the repository referenced an older Neon-auth and 
 ## License
 
 No license file is currently present in this repository.
+
+## TODO
+
+- Add ability to adjust font size of both topic and derivatives using `Ctrl +` and `Ctrl -`, and via display settings.
