@@ -10,11 +10,16 @@ import React, {
 import Image from "next/image";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import type { z } from "zod";
 import { authClient } from "@/lib/auth";
 import { authFetch } from "@/lib/api-client";
 import {
   deleteContentResponseSchema,
   listContentResponseSchema,
+  listTrashResponseSchema,
+  purgeTrashResponseSchema,
+  restoreTrashResponseSchema,
+  trashEntrySchema,
   contentNodeSchema,
   contentUpsertRequestSchema,
   upsertContentResponseSchema,
@@ -106,6 +111,8 @@ const isE2E = process.env.NEXT_PUBLIC_E2E === "true";
 const LOCAL_FILESYSTEM_KEY = "engram.filesystem.v1";
 const LOCAL_TOPICS_KEY = "engram.topics.v1";
 const LOCAL_ACTIVE_TOPIC_KEY = "engram.activeTopicId.v1";
+const LOCAL_TRASH_KEY = "engram.trash.v1";
+const TRASH_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 const WALLPAPER_FILENAME_KEY = "engram.wallpaper.filename.v1";
 const WALLPAPER_OPACITY_KEY = "engram.wallpaper.opacity.v1";
 const SHOW_KEY_BUFFER_KEY = "engram.showKeyBuffer";
@@ -455,6 +462,192 @@ const getTopicPreview = (topic: FileNode["topic"]) => {
   return preview || "Empty note";
 };
 
+type TrashEntry = z.infer<typeof trashEntrySchema>;
+type LocalTrashRecord = TrashEntry & {
+  subtree: ContentNode[];
+};
+
+const formatRelativeDuration = (fromIso: string) => {
+  const fromMs = new Date(fromIso).getTime();
+  if (!Number.isFinite(fromMs)) return "";
+  const diffMs = fromMs - Date.now();
+  const absMs = Math.abs(diffMs);
+  const minute = 60 * 1000;
+  const hour = 60 * minute;
+  const day = 24 * hour;
+  const future = diffMs >= 0;
+  let value: string;
+  if (absMs < hour) {
+    const minutes = Math.max(1, Math.round(absMs / minute));
+    value = `${minutes} min${minutes === 1 ? "" : "s"}`;
+  } else if (absMs < day) {
+    const hours = Math.max(1, Math.round(absMs / hour));
+    value = `${hours} hour${hours === 1 ? "" : "s"}`;
+  } else {
+    const days = Math.max(1, Math.round(absMs / day));
+    value = `${days} day${days === 1 ? "" : "s"}`;
+  }
+  return future ? `in ${value}` : `${value} ago`;
+};
+
+type TrashPanelProps = {
+  entries: TrashEntry[];
+  loadStatus: "idle" | "loading" | "ready" | "error";
+  error: string | null;
+  purgePendingId: string | null;
+  onArmPurge: (id: string | null) => void;
+  onConfirmPurge: (id: string) => void;
+  onRestore: (id: string) => void;
+  emptyPending: boolean;
+  onArmEmpty: () => void;
+  onConfirmEmpty: () => void;
+  onCancelEmpty: () => void;
+  onRefresh: () => void;
+};
+
+const TrashPanel = ({
+  entries,
+  loadStatus,
+  error,
+  purgePendingId,
+  onArmPurge,
+  onConfirmPurge,
+  onRestore,
+  emptyPending,
+  onArmEmpty,
+  onConfirmEmpty,
+  onCancelEmpty,
+  onRefresh,
+}: TrashPanelProps) => (
+  <div className="space-y-4" data-testid="trash-panel">
+    <div className="flex items-center justify-between">
+      <div>
+        <div className="text-sm font-bold text-[#cbd3f2]">
+          {entries.length === 0
+            ? "No items in recycle bin"
+            : `${entries.length} item${entries.length === 1 ? "" : "s"} in recycle bin`}
+        </div>
+        <div className="mt-1 text-sm text-[#94a0c6]">
+          Restore anything you deleted, or remove items forever.
+        </div>
+      </div>
+      <div className="flex items-center gap-2">
+        <button
+          className="text-sm font-bold px-2 py-1 rounded border border-[#2a3350] text-[#9bb2ff] hover:bg-[#2a3350]/30 transition"
+          onClick={onRefresh}
+          data-testid="trash-refresh"
+        >
+          REFRESH
+        </button>
+        {emptyPending ? (
+          <>
+            <button
+              className="text-sm font-bold px-2 py-1 rounded border border-[#f27a93]/60 bg-[#2a1d21] text-[#ffb0bd] hover:bg-[#f27a93]/25 transition"
+              onClick={onConfirmEmpty}
+              data-testid="trash-empty-confirm"
+            >
+              CONFIRM EMPTY
+            </button>
+            <button
+              className="text-sm font-bold px-2 py-1 rounded border border-[#2a3350] text-[#9bb2ff] hover:bg-[#2a3350]/30 transition"
+              onClick={onCancelEmpty}
+            >
+              CANCEL
+            </button>
+          </>
+        ) : (
+          <button
+            className="text-sm font-bold px-2 py-1 rounded border border-[#f27a93]/40 text-[#ff9aaa] hover:bg-[#f27a93]/15 transition disabled:opacity-40 disabled:cursor-not-allowed"
+            onClick={onArmEmpty}
+            disabled={entries.length === 0}
+            data-testid="trash-empty"
+          >
+            EMPTY TRASH
+          </button>
+        )}
+      </div>
+    </div>
+    {error && (
+      <div className="rounded-lg border border-[#f27a93]/40 bg-[#2a1d21]/70 px-3 py-2 text-sm text-[#ffb0bd]">
+        {error}
+      </div>
+    )}
+    {loadStatus === "loading" && entries.length === 0 ? (
+      <div className="rounded-lg border border-dashed border-[#2a3350] bg-[#101521] px-4 py-5 text-sm text-[#7f8bb4]">
+        Loading recycle bin…
+      </div>
+    ) : entries.length === 0 ? (
+      <div className="rounded-lg border border-dashed border-[#2a3350] bg-[#101521] px-4 py-5 text-sm text-[#7f8bb4]">
+        Recycle bin is empty. Deleted items appear here for 30 days before being
+        permanently removed.
+      </div>
+    ) : (
+      <div className="space-y-2" data-testid="trash-list">
+        {entries.map((entry) => {
+          const isPurgeArmed = purgePendingId === entry.id;
+          return (
+            <div
+              key={entry.id}
+              data-testid={`trash-item-${entry.id}`}
+              className={`flex items-center gap-3 rounded-lg border px-3 py-2 ${
+                isPurgeArmed
+                  ? "border-[#f27a93]/60 bg-[#231821]"
+                  : "border-[#22283a] bg-[#161b27]"
+              }`}
+            >
+              <ExplorerNodeIcon type={entry.type} />
+              <div className="min-w-0 flex-1">
+                <div className="truncate text-base text-[#c0caf5]">
+                  {entry.name}
+                </div>
+                <div className="truncate text-xs text-[#7f8bb4]">
+                  Deleted {formatRelativeDuration(entry.deletedAt)} · Expires{" "}
+                  {formatRelativeDuration(entry.expiresAt)}
+                  {entry.descendantsCount > 0
+                    ? ` · ${entry.descendantsCount} nested item${entry.descendantsCount === 1 ? "" : "s"}`
+                    : ""}
+                </div>
+              </div>
+              <button
+                className="text-sm font-bold px-2 py-1 rounded border border-[#7aa2f7]/40 text-[#9bb2ff] hover:bg-[#5b79d6]/15 transition"
+                data-testid={`trash-restore-${entry.id}`}
+                onClick={() => onRestore(entry.id)}
+              >
+                RESTORE
+              </button>
+              {isPurgeArmed ? (
+                <>
+                  <button
+                    className="text-sm font-bold px-2 py-1 rounded border border-[#f27a93]/60 bg-[#2a1d21] text-[#ffb0bd] hover:bg-[#f27a93]/25 transition"
+                    data-testid={`trash-purge-confirm-${entry.id}`}
+                    onClick={() => onConfirmPurge(entry.id)}
+                  >
+                    CONFIRM DELETE
+                  </button>
+                  <button
+                    className="text-sm font-bold px-2 py-1 rounded border border-[#2a3350] text-[#9bb2ff] hover:bg-[#2a3350]/30 transition"
+                    onClick={() => onArmPurge(null)}
+                  >
+                    CANCEL
+                  </button>
+                </>
+              ) : (
+                <button
+                  className="text-sm font-bold px-2 py-1 rounded border border-[#f27a93]/40 text-[#ff9aaa] hover:bg-[#f27a93]/15 transition"
+                  data-testid={`trash-purge-${entry.id}`}
+                  onClick={() => onArmPurge(entry.id)}
+                >
+                  DELETE FOREVER
+                </button>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    )}
+  </div>
+);
+
 const ExplorerNodeIcon = ({ type }: { type: ContentNode["type"] }) => (
   <span
     className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border ${
@@ -653,6 +846,34 @@ const saveLocalFileSystem = (
   try {
     localStorage.setItem(LOCAL_FILESYSTEM_KEY, JSON.stringify(fileSystem));
     localStorage.setItem(LOCAL_ACTIVE_TOPIC_KEY, activeTopicId);
+  } catch {
+    // ignore storage errors
+  }
+};
+
+const pruneExpiredLocalTrash = (records: LocalTrashRecord[]) => {
+  const now = Date.now();
+  return records.filter((record) => {
+    const deletedTime = new Date(record.deletedAt).getTime();
+    return Number.isFinite(deletedTime) && now - deletedTime < TRASH_RETENTION_MS;
+  });
+};
+
+const loadLocalTrash = (): LocalTrashRecord[] => {
+  try {
+    const raw = localStorage.getItem(LOCAL_TRASH_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return pruneExpiredLocalTrash(parsed as LocalTrashRecord[]);
+  } catch {
+    return [];
+  }
+};
+
+const saveLocalTrash = (records: LocalTrashRecord[]) => {
+  try {
+    localStorage.setItem(LOCAL_TRASH_KEY, JSON.stringify(records));
   } catch {
     // ignore storage errors
   }
@@ -929,6 +1150,19 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
     guestMode ? "display" : "account",
   );
   const [isDocumentSwitcherOpen, setIsDocumentSwitcherOpen] = useState(false);
+  const [isTrashViewOpen, setIsTrashViewOpen] = useState(false);
+  const [trashEntries, setTrashEntries] = useState<TrashEntry[]>([]);
+  const [localTrashRecords, setLocalTrashRecords] = useState<LocalTrashRecord[]>(
+    [],
+  );
+  const [trashLoadStatus, setTrashLoadStatus] = useState<
+    "idle" | "loading" | "ready" | "error"
+  >("idle");
+  const [trashError, setTrashError] = useState<string | null>(null);
+  const [trashPurgePendingId, setTrashPurgePendingId] = useState<string | null>(
+    null,
+  );
+  const [trashEmptyPending, setTrashEmptyPending] = useState(false);
   const [wallpaperOptions, setWallpaperOptions] = useState<WallpaperOption[]>(
     [],
   );
@@ -1846,6 +2080,29 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
       pushTopicMenuUndoSnapshot();
 
       const deletedIds = new Set(getSubtreeNodeIds(id, fileSystem.nodesById));
+      if (useLocalPersistence) {
+        const subtreeNodes: ContentNode[] = [];
+        deletedIds.forEach((nodeId) => {
+          const node = fileSystem.nodesById[nodeId];
+          if (node) subtreeNodes.push(node);
+        });
+        const now = new Date();
+        const record: LocalTrashRecord = {
+          id: target.id,
+          parentId: target.parentId,
+          type: target.type,
+          name: target.name,
+          deletedAt: now.toISOString(),
+          expiresAt: new Date(now.getTime() + TRASH_RETENTION_MS).toISOString(),
+          descendantsCount: Math.max(0, subtreeNodes.length - 1),
+          subtree: subtreeNodes,
+        };
+        setLocalTrashRecords((prev) => {
+          const next = pruneExpiredLocalTrash([record, ...prev]);
+          saveLocalTrash(next);
+          return next;
+        });
+      }
       let nextFileSystem: FileSystemState = {
         ...fileSystem,
         nodesById: Object.values(fileSystem.nodesById).reduce<
@@ -1906,6 +2163,7 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
       }
 
       void deletePersistedNode(id);
+      showToast(`Moved "${target.name}" to recycle bin`);
     },
     [
       activeTopicId,
@@ -1914,6 +2172,7 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
       pushTopicMenuUndoSnapshot,
       queueSaveNode,
       resetHistory,
+      useLocalPersistence,
     ],
   );
 
@@ -2271,6 +2530,256 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
       1500,
     );
   };
+
+  const localRecordToTrashEntry = (record: LocalTrashRecord): TrashEntry => ({
+    id: record.id,
+    parentId: record.parentId,
+    type: record.type,
+    name: record.name,
+    deletedAt: record.deletedAt,
+    expiresAt: record.expiresAt,
+    descendantsCount: record.descendantsCount,
+  });
+
+  const refreshTrash = useCallback(async () => {
+    if (useLocalPersistence) {
+      const pruned = pruneExpiredLocalTrash(loadLocalTrash());
+      setLocalTrashRecords(pruned);
+      saveLocalTrash(pruned);
+      setTrashEntries(pruned.map(localRecordToTrashEntry));
+      setTrashLoadStatus("ready");
+      setTrashError(null);
+      return;
+    }
+    if (!userId || !isAuthSynced) return;
+    setTrashLoadStatus("loading");
+    setTrashError(null);
+    try {
+      const response = await requestWithAuth("/api/content/trash");
+      if (!response.ok) throw new Error(`Load failed (${response.status})`);
+      const payload = listTrashResponseSchema.parse(await response.json());
+      setTrashEntries(payload.data.entries);
+      setTrashLoadStatus("ready");
+    } catch (error) {
+      console.error("Failed to load recycle bin", error);
+      setTrashError(formatPersistError(error));
+      setTrashLoadStatus("error");
+    }
+  }, [
+    formatPersistError,
+    isAuthSynced,
+    requestWithAuth,
+    useLocalPersistence,
+    userId,
+  ]);
+
+  const openTrashView = useCallback(() => {
+    setIsTrashViewOpen(true);
+    setTrashPurgePendingId(null);
+    setTrashEmptyPending(false);
+    void refreshTrash();
+  }, [refreshTrash]);
+
+  const closeTrashView = useCallback(() => {
+    setIsTrashViewOpen(false);
+    setTrashPurgePendingId(null);
+    setTrashEmptyPending(false);
+  }, []);
+
+  const captureSubtreeSnapshot = useCallback(
+    (rootId: string): { rootNode: ContentNode; subtree: ContentNode[] } | null => {
+      const rootNode = fileSystem.nodesById[rootId];
+      if (!rootNode) return null;
+      const subtreeIds = getSubtreeNodeIds(rootId, fileSystem.nodesById);
+      const subtree: ContentNode[] = [];
+      subtreeIds.forEach((nodeId) => {
+        const node = fileSystem.nodesById[nodeId];
+        if (node) subtree.push(node);
+      });
+      return { rootNode, subtree };
+    },
+    [fileSystem.nodesById],
+  );
+
+  const recordLocalTrashSnapshot = useCallback(
+    (rootId: string) => {
+      const snapshot = captureSubtreeSnapshot(rootId);
+      if (!snapshot) return;
+      const now = new Date();
+      const expires = new Date(now.getTime() + TRASH_RETENTION_MS);
+      const record: LocalTrashRecord = {
+        id: snapshot.rootNode.id,
+        parentId: snapshot.rootNode.parentId,
+        type: snapshot.rootNode.type,
+        name: snapshot.rootNode.name,
+        deletedAt: now.toISOString(),
+        expiresAt: expires.toISOString(),
+        descendantsCount: Math.max(0, snapshot.subtree.length - 1),
+        subtree: snapshot.subtree,
+      };
+      setLocalTrashRecords((prev) => {
+        const next = pruneExpiredLocalTrash([record, ...prev]);
+        saveLocalTrash(next);
+        return next;
+      });
+    },
+    [captureSubtreeSnapshot],
+  );
+
+  const applyRestoredNodes = useCallback(
+    (restoredNodes: ContentNode[]) => {
+      if (restoredNodes.length === 0) return null;
+      let activeParentId: string | null = null;
+      setFileSystem((prev) => {
+        const nextNodesById = { ...prev.nodesById };
+        restoredNodes.forEach((node) => {
+          nextNodesById[node.id] = node;
+        });
+        return { ...prev, nodesById: nextNodesById };
+      });
+      setNodeDrafts((prev) => {
+        const next = { ...prev };
+        restoredNodes.forEach((node) => {
+          if (!node.isRoot) next[node.id] = node.name;
+        });
+        return next;
+      });
+      const rootOfRestore =
+        restoredNodes.find((node) =>
+          restoredNodes.every((candidate) => candidate.id !== node.parentId),
+        ) ?? restoredNodes[0];
+      activeParentId = rootOfRestore.parentId ?? fileSystem.rootId;
+      setCurrentFolderId(activeParentId);
+      setSelectedNodeId(rootOfRestore.id);
+      setExpandedFolderIds((prev) => ({
+        ...prev,
+        [rootOfRestore.parentId ?? fileSystem.rootId]: true,
+      }));
+      restoredNodes.forEach((node) => {
+        if (!useLocalPersistence) {
+          remoteTopicIdsRef.current.add(node.id);
+        }
+      });
+      return rootOfRestore;
+    },
+    [fileSystem.rootId, useLocalPersistence],
+  );
+
+  const restoreTrashEntry = useCallback(
+    async (id: string) => {
+      if (useLocalPersistence) {
+        const record = localTrashRecords.find((entry) => entry.id === id);
+        if (!record) return;
+        const parentStillExists =
+          !record.parentId ||
+          record.parentId === fileSystem.rootId ||
+          Boolean(fileSystem.nodesById[record.parentId]);
+        const restored = record.subtree.map((node) => {
+          if (node.id !== record.id) return node;
+          return parentStillExists
+            ? node
+            : ({ ...node, parentId: fileSystem.rootId } as ContentNode);
+        });
+        applyRestoredNodes(restored);
+        setLocalTrashRecords((prev) => {
+          const next = prev.filter((entry) => entry.id !== id);
+          saveLocalTrash(next);
+          return next;
+        });
+        setTrashEntries((prev) => prev.filter((entry) => entry.id !== id));
+        showToast(`Restored "${record.name}"`);
+        return;
+      }
+      try {
+        const response = await requestWithAuth("/api/content/trash/restore", {
+          method: "POST",
+          body: JSON.stringify({ id }),
+        });
+        if (!response.ok) throw new Error(`Restore failed (${response.status})`);
+        const payload = restoreTrashResponseSchema.parse(await response.json());
+        applyRestoredNodes(payload.data.nodes);
+        setTrashEntries((prev) => prev.filter((entry) => entry.id !== id));
+        const restoredName =
+          payload.data.nodes.find((node) => node.id === payload.data.id)?.name ??
+          "item";
+        showToast(`Restored "${restoredName}"`);
+      } catch (error) {
+        console.error("Failed to restore node", error);
+        setTrashError(formatPersistError(error));
+      }
+    },
+    [
+      applyRestoredNodes,
+      fileSystem.nodesById,
+      fileSystem.rootId,
+      formatPersistError,
+      localTrashRecords,
+      requestWithAuth,
+      useLocalPersistence,
+    ],
+  );
+
+  const purgeTrashEntry = useCallback(
+    async (id: string) => {
+      const targetName =
+        trashEntries.find((entry) => entry.id === id)?.name ?? "item";
+      if (useLocalPersistence) {
+        setLocalTrashRecords((prev) => {
+          const next = prev.filter((entry) => entry.id !== id);
+          saveLocalTrash(next);
+          return next;
+        });
+        setTrashEntries((prev) => prev.filter((entry) => entry.id !== id));
+        setTrashPurgePendingId(null);
+        showToast(`Permanently deleted "${targetName}"`);
+        return;
+      }
+      try {
+        const response = await requestWithAuth(
+          `/api/content/trash?id=${encodeURIComponent(id)}`,
+          { method: "DELETE" },
+        );
+        if (!response.ok) throw new Error(`Delete failed (${response.status})`);
+        purgeTrashResponseSchema.parse(await response.json());
+        setTrashEntries((prev) => prev.filter((entry) => entry.id !== id));
+        setTrashPurgePendingId(null);
+        showToast(`Permanently deleted "${targetName}"`);
+      } catch (error) {
+        console.error("Failed to purge node", error);
+        setTrashError(formatPersistError(error));
+      }
+    },
+    [
+      formatPersistError,
+      requestWithAuth,
+      trashEntries,
+      useLocalPersistence,
+    ],
+  );
+
+  const emptyTrash = useCallback(async () => {
+    if (useLocalPersistence) {
+      setLocalTrashRecords([]);
+      saveLocalTrash([]);
+      setTrashEntries([]);
+      setTrashEmptyPending(false);
+      showToast("Recycle bin emptied");
+      return;
+    }
+    try {
+      const response = await requestWithAuth("/api/content/trash", {
+        method: "DELETE",
+      });
+      if (!response.ok) throw new Error(`Empty failed (${response.status})`);
+      purgeTrashResponseSchema.parse(await response.json());
+      setTrashEntries([]);
+      setTrashEmptyPending(false);
+      showToast("Recycle bin emptied");
+    } catch (error) {
+      console.error("Failed to empty recycle bin", error);
+      setTrashError(formatPersistError(error));
+    }
+  }, [formatPersistError, requestWithAuth, useLocalPersistence]);
 
   const updateEditorFontScale = (
     value: string | number,
@@ -2737,6 +3246,24 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
         target instanceof HTMLInputElement &&
         (target.dataset.testid || "").startsWith("topic-name-input-");
       if (isDocumentSwitcherOpen) {
+        if (isTrashViewOpen) {
+          if (!isTopicMenuNameInput) {
+            e.preventDefault();
+            if (e.key === "Escape") {
+              if (trashEmptyPending) {
+                setTrashEmptyPending(false);
+                return;
+              }
+              if (trashPurgePendingId) {
+                setTrashPurgePendingId(null);
+                return;
+              }
+              closeTrashView();
+              return;
+            }
+          }
+          return;
+        }
         if (!isTopicMenuNameInput) {
           e.preventDefault();
           if (topicMoveTargetId) {
@@ -2767,6 +3294,7 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
             setTopicMenuEditingTarget(null);
             topicMenuDeletePendingRef.current = false;
             setTopicMenuDeletePending(false);
+            closeTrashView();
             return;
           }
           if (e.key === "u") {
@@ -3947,6 +4475,11 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
     const hydrateTopics = async () => {
       if (isHydrated) return;
       if (useLocalPersistence) {
+        const trash = loadLocalTrash();
+        if (isActive) {
+          setLocalTrashRecords(trash);
+          saveLocalTrash(trash);
+        }
         const stored = loadLocalFileSystem();
         const activeId = localStorage.getItem(LOCAL_ACTIVE_TOPIC_KEY);
         const nextFileSystem = stored ?? createInitialFileSystem();
@@ -5929,26 +6462,64 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
             <div className="flex items-center justify-between border-b border-[#1f2536] bg-[#171c28] px-5 py-4">
               <div>
                 <div className="text-sm font-bold tracking-[0.2em] text-[#cbd3f2]">
-                  FILESYSTEM
+                  {isTrashViewOpen ? "RECYCLE BIN" : "FILESYSTEM"}
                 </div>
                 <div className="text-sm text-[#94a0c6]">
-                  Explorer-style folders and files
+                  {isTrashViewOpen
+                    ? "Items stay here for 30 days before being deleted permanently"
+                    : "Explorer-style folders and files"}
                 </div>
               </div>
-              <button
-                className="text-sm font-bold px-2 py-1 rounded border border-[#5b79d6]/40 text-[#9bb2ff] hover:bg-[#5b79d6]/15 transition"
-                data-testid="topic-close"
-                onClick={() => {
-                  topicMenuDeletePendingRef.current = false;
-                  setTopicMenuDeletePending(false);
-                  setIsDocumentSwitcherOpen(false);
-                  setTopicMenuEditingTarget(null);
-                }}
-              >
-                CLOSE
-              </button>
+              <div className="flex items-center gap-2">
+                {isTrashViewOpen ? (
+                  <button
+                    className="text-sm font-bold px-2 py-1 rounded border border-[#2a3350] text-[#9bb2ff] hover:bg-[#2a3350]/30 transition"
+                    data-testid="trash-back"
+                    onClick={closeTrashView}
+                  >
+                    BACK TO FILES
+                  </button>
+                ) : (
+                  <button
+                    className="text-sm font-bold px-2 py-1 rounded border border-[#2a3350] text-[#9bb2ff] hover:bg-[#2a3350]/30 transition"
+                    data-testid="trash-open"
+                    onClick={openTrashView}
+                  >
+                    RECYCLE BIN
+                  </button>
+                )}
+                <button
+                  className="text-sm font-bold px-2 py-1 rounded border border-[#5b79d6]/40 text-[#9bb2ff] hover:bg-[#5b79d6]/15 transition"
+                  data-testid="topic-close"
+                  onClick={() => {
+                    topicMenuDeletePendingRef.current = false;
+                    setTopicMenuDeletePending(false);
+                    setIsDocumentSwitcherOpen(false);
+                    setTopicMenuEditingTarget(null);
+                    closeTrashView();
+                  }}
+                >
+                  CLOSE
+                </button>
+              </div>
             </div>
             <section className="relative p-5 space-y-4">
+              {isTrashViewOpen ? (
+                <TrashPanel
+                  entries={trashEntries}
+                  loadStatus={trashLoadStatus}
+                  error={trashError}
+                  purgePendingId={trashPurgePendingId}
+                  onArmPurge={setTrashPurgePendingId}
+                  onConfirmPurge={purgeTrashEntry}
+                  onRestore={restoreTrashEntry}
+                  emptyPending={trashEmptyPending}
+                  onArmEmpty={() => setTrashEmptyPending(true)}
+                  onConfirmEmpty={emptyTrash}
+                  onCancelEmpty={() => setTrashEmptyPending(false)}
+                  onRefresh={refreshTrash}
+                />
+              ) : (<>
               <div className="flex items-center justify-between">
                 <div>
                   <div className="text-sm font-bold text-[#cbd3f2]">
@@ -6213,6 +6784,7 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
                   </div>
                 </div>
               )}
+              </>)}
             </section>
           </div>
         </div>
