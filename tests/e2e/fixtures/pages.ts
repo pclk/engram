@@ -32,6 +32,10 @@ export class GuestPage {
     return this.page.locator('[data-testid="topic-switcher"]');
   }
 
+  get settingsModal(): Locator {
+    return this.page.locator('[data-testid="settings-modal"]');
+  }
+
   async goto() {
     await this.page.goto('/guest');
     await expect(this.firstConceptText).toBeVisible();
@@ -54,5 +58,10 @@ export class GuestPage {
 
   currentTopicTitle() {
     return this.page.locator('[data-testid="topic-title"]');
+  }
+
+  async openSettings() {
+    await this.page.getByLabel('Open workspace settings').click();
+    await expect(this.settingsModal).toBeVisible();
   }
 }

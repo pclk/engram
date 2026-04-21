@@ -79,7 +79,8 @@ This makes Engram useful for note-taking that is meant to be reviewed, questione
 | `/login`                | Email/password sign-in                             |
 | `/register`             | Account creation                                   |
 | `/guest`                | Local-only guest workspace                         |
-| `/account/[...slug]`    | Account shell / placeholder route                  |
+| `/account`              | Standalone account overview                        |
+| `/account/[...slug]`    | Standalone account sections (`profile`, `security`) |
 | `/api/content`          | Filesystem and topic CRUD                          |
 | `/api/login`            | Start a session                                    |
 | `/api/register`         | Create a user and session                          |
@@ -176,18 +177,18 @@ Legacy records in `engram_topics` are migrated into `engram_nodes` when a user f
 ### Prerequisites
 
 - Node.js 20+ recommended
-- npm
+- pnpm 10+
 - PostgreSQL-compatible database if you want authenticated persistence
 
-This repository is intentionally **npm-only**:
+This repository uses **pnpm**:
 
-- `preinstall` rejects non-npm installs
-- `ci:lockfile` rejects `pnpm-lock.yaml`
+- `preinstall` rejects non-pnpm installs
+- `ci:lockfile` requires `pnpm-lock.yaml` and rejects `package-lock.json`
 
 ### 1. Install dependencies
 
 ```bash
-npm ci
+pnpm install --frozen-lockfile
 ```
 
 Or use the bootstrap script:
@@ -205,7 +206,7 @@ Or use the bootstrap script:
 If you just want to explore the editor locally:
 
 ```bash
-npm run dev
+pnpm run dev
 ```
 
 Then open:
@@ -229,14 +230,14 @@ You can also keep a `DIRECT_URL="postgresql://..."` entry for direct migration w
 Then generate Prisma client and run migrations:
 
 ```bash
-npm run prisma:generate
-npm run prisma:migrate:dev
+pnpm run prisma:generate
+pnpm run prisma:migrate:dev
 ```
 
 Finally start the app:
 
 ```bash
-npm run dev
+pnpm run dev
 ```
 
 Visit:
@@ -272,20 +273,20 @@ You may see variables such as `NEXT_PUBLIC_NEON_AUTH_URL`, `NEXT_PUBLIC_NEON_DAT
 
 | Command                      | What it does                          |
 | ---------------------------- | ------------------------------------- |
-| `npm run dev`                | Start Next.js in development          |
-| `npm run build`              | Create a production build             |
-| `npm run start`              | Start the production server           |
-| `npm run lint`               | Run Next.js linting                   |
-| `npm run typecheck`          | Run TypeScript without emitting files |
-| `npm run format`             | Check Prettier formatting             |
-| `npm run format:write`       | Rewrite files with Prettier           |
-| `npm run test`               | Run the Vitest suite                  |
-| `npm run test:unit`          | Run unit tests                        |
-| `npm run test:e2e`           | Run Playwright end-to-end tests       |
-| `npm run test:e2e:ui`        | Run Playwright in UI mode             |
-| `npm run prisma:generate`    | Generate Prisma client                |
-| `npm run prisma:migrate:dev` | Run Prisma development migrations     |
-| `npm run ci`                 | Run the repository CI command chain   |
+| `pnpm run dev`               | Start Next.js in development          |
+| `pnpm run build`             | Create a production build             |
+| `pnpm run start`             | Start the production server           |
+| `pnpm run lint`              | Run Next.js linting                   |
+| `pnpm run typecheck`         | Run TypeScript without emitting files |
+| `pnpm run format`            | Check Prettier formatting             |
+| `pnpm run format:write`      | Rewrite files with Prettier           |
+| `pnpm run test`              | Run the Vitest suite                  |
+| `pnpm run test:unit`         | Run unit tests                        |
+| `pnpm run test:e2e`          | Run Playwright end-to-end tests       |
+| `pnpm run test:e2e:ui`       | Run Playwright in UI mode             |
+| `pnpm run prisma:generate`   | Generate Prisma client                |
+| `pnpm run prisma:migrate:dev` | Run Prisma development migrations    |
+| `pnpm run ci`                | Run the repository CI command chain   |
 
 ## Testing
 
@@ -301,7 +302,7 @@ Vitest covers utility and API-layer behavior, including:
 Run them with:
 
 ```bash
-npm run test:unit
+pnpm run test:unit
 ```
 
 ### End-to-end tests
@@ -317,19 +318,19 @@ Playwright covers core browser flows such as:
 Run them with:
 
 ```bash
-npm run test:e2e
+pnpm run test:e2e
 ```
 
 For interactive debugging:
 
 ```bash
-npm run test:e2e:ui
+pnpm run test:e2e:ui
 ```
 
 ### Full CI sequence
 
 ```bash
-npm run ci
+pnpm run ci
 ```
 
 This runs:
@@ -339,7 +340,7 @@ This runs:
 - Prisma generation + typecheck
 - unit tests
 - end-to-end tests
-- `npm audit`
+- `pnpm audit`
 
 ## API Overview
 

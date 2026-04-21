@@ -27,14 +27,19 @@ if ! command -v node >/dev/null 2>&1; then
   exit 1
 fi
 
-if ! command -v npm >/dev/null 2>&1; then
-  echo "Error: npm is not installed. Install npm and rerun setup.sh."
+if ! command -v pnpm >/dev/null 2>&1; then
+  echo "Error: pnpm is not installed. Install pnpm 10+ and rerun setup.sh."
   exit 1
 fi
 
 NODE_MAJOR="$(node -p "process.versions.node.split('.')[0]")"
-if [ -f pnpm-lock.yaml ]; then
-  echo "Error: Found pnpm-lock.yaml. This repository uses npm with package-lock.json."
+if [ ! -f pnpm-lock.yaml ]; then
+  echo "Error: Missing pnpm-lock.yaml. This repository uses pnpm."
+  exit 1
+fi
+
+if [ -f package-lock.json ]; then
+  echo "Error: Found package-lock.json. This repository uses pnpm with pnpm-lock.yaml."
   exit 1
 fi
 
@@ -56,7 +61,7 @@ else
 fi
 
 echo "Installing Node dependencies..."
-npm ci
+pnpm install --frozen-lockfile
 
 if [ ! -f .env.local ]; then
   cat > .env.local <<'ENVEOF'
@@ -75,7 +80,7 @@ DIRECT_URL=
 # Optional model key for live Gemini calls
 GEMINI_API_KEY=
 ENVEOF
-  echo "Created .env.local template. Fill in Neon/DB env vars (and GEMINI_API_KEY if needed) before npm run dev."
+  echo "Created .env.local template. Fill in Neon/DB env vars (and GEMINI_API_KEY if needed) before pnpm run dev."
 fi
 
 if command -v ldd >/dev/null 2>&1; then
@@ -88,5 +93,5 @@ fi
 echo "Setup complete."
 echo "Next steps:"
 echo "  1) Add GEMINI_API_KEY to .env.local (if you need live model calls)."
-echo "  2) Run npm run dev (local development)."
-echo "  3) Run npm run test:e2e (end-to-end tests)."
+echo "  2) Run pnpm run dev (local development)."
+echo "  3) Run pnpm run test:e2e (end-to-end tests)."
