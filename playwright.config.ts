@@ -24,7 +24,7 @@ export default defineConfig({
   globalSetup: './tests/e2e/global-setup.ts',
   globalTeardown: './tests/e2e/global-teardown.ts',
   webServer: {
-    command: `npm run dev -- --hostname ${HOST} --port ${PORT}`,
+    command: `pnpm exec next dev --hostname ${HOST} --port ${PORT}`,
     url: BASE_URL,
     reuseExistingServer: !process.env.CI,
     timeout: 120_000,

@@ -13,11 +13,6 @@ import remarkGfm from "remark-gfm";
 import { authClient } from "@/lib/auth";
 import { authFetch } from "@/lib/api-client";
 import {
-  changePasswordSchema,
-  updateAvatarSchema,
-  updateProfileSchema,
-} from "@/lib/schemas/auth";
-import {
   deleteContentResponseSchema,
   listContentResponseSchema,
   contentNodeSchema,
@@ -48,6 +43,7 @@ import {
   normalizeWallpaperOpacity,
   type WallpaperOption,
 } from "@/src/lib/wallpapers";
+import { Account, type AccountPayload } from "@/src/views/account";
 
 // --- Configuration & Types ---
 
@@ -72,6 +68,14 @@ type TopicMenuSnapshot = {
 type LegendEntry = {
   keys: string;
   description: string;
+};
+type SettingsTab = "account" | "display";
+type InsertSelection = {
+  cursorIdx: number;
+  derivIdx: number;
+  start: number;
+  end: number;
+  direction: "forward" | "backward" | "none";
 };
 type LiveKeyIndicator = {
   id: number;
@@ -105,6 +109,18 @@ const LOCAL_ACTIVE_TOPIC_KEY = "engram.activeTopicId.v1";
 const WALLPAPER_FILENAME_KEY = "engram.wallpaper.filename.v1";
 const WALLPAPER_OPACITY_KEY = "engram.wallpaper.opacity.v1";
 const SHOW_KEY_BUFFER_KEY = "engram.showKeyBuffer";
+const EDITOR_FONT_SCALE_KEY = "engram.editor.fontScale.v1";
+const EDITOR_BLOCK_WIDTH_KEY = "engram.editor.blockWidth.v1";
+const DEFAULT_EDITOR_FONT_SCALE = 1;
+const MIN_EDITOR_FONT_SCALE = 0.5;
+const MAX_EDITOR_FONT_SCALE = 3;
+const EDITOR_FONT_SCALE_STEP = 0.05;
+const DEFAULT_EDITOR_BLOCK_WIDTH = 768;
+const MIN_EDITOR_BLOCK_WIDTH = 576;
+const MAX_EDITOR_BLOCK_WIDTH = 3840;
+const EDITOR_BLOCK_WIDTH_STEP = 1;
+const CONCEPT_FONT_BASE_REM = 1.125;
+const DERIVATIVE_FONT_BASE_REM = 0.875;
 const EMPTY_MODIFIERS: PressedModifiers = {
   alt: false,
   ctrl: false,
@@ -120,6 +136,43 @@ const formatKeyboardKey = (key: string) => {
   if (key === "Shift") return "Shift";
   if (key === "Meta") return "Meta";
   return key;
+};
+
+const normalizeEditorFontScale = (
+  value: string | number | null | undefined,
+) => {
+  const parsed =
+    typeof value === "number"
+      ? value
+      : typeof value === "string"
+        ? Number.parseFloat(value)
+        : Number.NaN;
+  if (!Number.isFinite(parsed)) return DEFAULT_EDITOR_FONT_SCALE;
+  const snapped =
+    Math.round(parsed / EDITOR_FONT_SCALE_STEP) * EDITOR_FONT_SCALE_STEP;
+  return Number(
+    Math.min(
+      MAX_EDITOR_FONT_SCALE,
+      Math.max(MIN_EDITOR_FONT_SCALE, snapped),
+    ).toFixed(2),
+  );
+};
+
+const normalizeEditorBlockWidth = (
+  value: string | number | null | undefined,
+) => {
+  const parsed =
+    typeof value === "number"
+      ? value
+      : typeof value === "string"
+        ? Number.parseFloat(value)
+        : Number.NaN;
+  if (!Number.isFinite(parsed)) return DEFAULT_EDITOR_BLOCK_WIDTH;
+  const rounded = Math.round(parsed);
+  return Math.min(
+    MAX_EDITOR_BLOCK_WIDTH,
+    Math.max(MIN_EDITOR_BLOCK_WIDTH, rounded),
+  );
 };
 
 const getToneClasses = (
@@ -872,6 +925,9 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
   const [lastSearchQuery, setLastSearchQuery] = useState("");
   const [isSearching, setIsSearching] = useState(false);
   const [isAccountOpen, setIsAccountOpen] = useState(false);
+  const [settingsTab, setSettingsTab] = useState<SettingsTab>(
+    guestMode ? "display" : "account",
+  );
   const [isDocumentSwitcherOpen, setIsDocumentSwitcherOpen] = useState(false);
   const [wallpaperOptions, setWallpaperOptions] = useState<WallpaperOption[]>(
     [],
@@ -885,6 +941,20 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
   const [backgroundOpacity, setBackgroundOpacity] = useState(
     DEFAULT_WALLPAPER_OPACITY,
   );
+  const [editorFontScale, setEditorFontScale] = useState(
+    DEFAULT_EDITOR_FONT_SCALE,
+  );
+  const [editorBlockWidth, setEditorBlockWidth] = useState(
+    DEFAULT_EDITOR_BLOCK_WIDTH,
+  );
+  const [editorFontPercentDraft, setEditorFontPercentDraft] = useState(
+    String(Math.round(DEFAULT_EDITOR_FONT_SCALE * 100)),
+  );
+  const [editorBlockWidthDraft, setEditorBlockWidthDraft] = useState(
+    String(DEFAULT_EDITOR_BLOCK_WIDTH),
+  );
+  const [insertSelection, setInsertSelection] =
+    useState<InsertSelection | null>(null);
   const [showKeyBuffer, setShowKeyBuffer] = useState(true);
   const [liveKeyIndicator, setLiveKeyIndicator] =
     useState<LiveKeyIndicator | null>(null);
@@ -895,24 +965,6 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
   const [sessionData, setSessionData] = useState<any>(null);
   const [authSyncError, setAuthSyncError] = useState<string | null>(null);
   const [isAuthSynced, setIsAuthSynced] = useState(false);
-  const [profileForm, setProfileForm] = useState({ name: "", email: "" });
-  const [profileStatus, setProfileStatus] = useState<{
-    type: "idle" | "saving" | "success" | "error";
-    message?: string;
-  }>({ type: "idle" });
-  const [avatarStatus, setAvatarStatus] = useState<{
-    type: "idle" | "saving" | "success" | "error";
-    message?: string;
-  }>({ type: "idle" });
-  const [passwordForm, setPasswordForm] = useState({
-    currentPassword: "",
-    newPassword: "",
-    confirmPassword: "",
-  });
-  const [passwordStatus, setPasswordStatus] = useState<{
-    type: "idle" | "saving" | "success" | "error";
-    message?: string;
-  }>({ type: "idle" });
   const user = sessionData?.user;
   const userName = guestMode
     ? "Guest"
@@ -924,6 +976,13 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
       .slice(0, 2)
       .map((part) => part[0]?.toUpperCase())
       .join("") || "U";
+  const accountInitialData =
+    !guestMode && sessionData?.user && sessionData?.session
+      ? ({
+          user: sessionData.user,
+          session: sessionData.session,
+        } as AccountPayload)
+      : null;
   const [selectionPending, setSelectionPending] = useState<{
     action: "DELETE" | "CHANGE";
     type: DerivativeType;
@@ -1027,6 +1086,47 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
   const activeInteractionLabel =
     liveKeyIndicator?.label ??
     (activeModifierLabels.length > 0 ? activeModifierLabels.join("+") : null);
+  const conceptTypographyStyle: React.CSSProperties = {
+    fontSize: `${(CONCEPT_FONT_BASE_REM * editorFontScale).toFixed(3)}rem`,
+    lineHeight: 1.75,
+  };
+  const derivativeTypographyStyle: React.CSSProperties = {
+    fontSize: `${(DERIVATIVE_FONT_BASE_REM * editorFontScale).toFixed(3)}rem`,
+    lineHeight: 1.6,
+  };
+  const editorFontPercent = Math.round(editorFontScale * 100);
+
+  useEffect(() => {
+    setEditorFontPercentDraft(String(editorFontPercent));
+  }, [editorFontPercent]);
+
+  useEffect(() => {
+    setEditorBlockWidthDraft(String(editorBlockWidth));
+  }, [editorBlockWidth]);
+
+  useEffect(() => {
+    if (mode !== "INSERT") {
+      setInsertSelection(null);
+      return;
+    }
+
+    setInsertSelection((prev) => {
+      if (
+        prev &&
+        prev.cursorIdx === cursorIdx &&
+        prev.derivIdx === derivIdx
+      ) {
+        return prev;
+      }
+      return {
+        cursorIdx,
+        derivIdx,
+        start: normalCursor,
+        end: normalCursor,
+        direction: "none",
+      };
+    });
+  }, [mode, cursorIdx, derivIdx, normalCursor]);
 
   const clearLiveKeyIndicator = useCallback(() => {
     if (liveKeyIndicatorTimerRef.current !== null) {
@@ -1840,6 +1940,44 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
     setNormalCursor(next);
   };
 
+  const syncInsertSelectionState = (
+    nextCursorIdx: number,
+    nextDerivIdx: number,
+    start: number,
+    end: number,
+    direction: "forward" | "backward" | "none" = "none",
+  ) => {
+    const nextStart = Math.max(0, Math.min(start, end));
+    const nextEnd = Math.max(nextStart, Math.max(start, end));
+    setInsertSelection({
+      cursorIdx: nextCursorIdx,
+      derivIdx: nextDerivIdx,
+      start: nextStart,
+      end: nextEnd,
+      direction,
+    });
+    setCursor(direction === "backward" ? nextStart : nextEnd);
+  };
+
+  const syncInsertSelectionFromTextarea = (
+    textarea: HTMLTextAreaElement,
+    nextCursorIdx = cursorIdx,
+    nextDerivIdx = derivIdx,
+  ) => {
+    const direction =
+      textarea.selectionDirection === "forward" ||
+      textarea.selectionDirection === "backward"
+        ? textarea.selectionDirection
+        : "none";
+    syncInsertSelectionState(
+      nextCursorIdx,
+      nextDerivIdx,
+      textarea.selectionStart,
+      textarea.selectionEnd,
+      direction,
+    );
+  };
+
   const cloneDerivative = (derivative: Derivative): Derivative => ({
     id: generateId(),
     type: derivative.type,
@@ -2134,6 +2272,217 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
     );
   };
 
+  const updateEditorFontScale = (
+    value: string | number,
+    options?: { toast?: boolean },
+  ) => {
+    const next = normalizeEditorFontScale(value);
+    if (next === editorFontScale) {
+      if (options?.toast) showToast(`Font size ${editorFontPercent}%`);
+      return;
+    }
+    setEditorFontScale(next);
+    if (options?.toast) showToast(`Font size ${Math.round(next * 100)}%`);
+  };
+
+  const commitEditorFontScaleDraft = () => {
+    if (editorFontPercentDraft.trim() === "") {
+      setEditorFontPercentDraft(String(editorFontPercent));
+      return;
+    }
+    updateEditorFontScale(Number(editorFontPercentDraft) / 100);
+  };
+
+  const adjustEditorFontScale = (
+    delta: number,
+    options?: { toast?: boolean },
+  ) => {
+    updateEditorFontScale(editorFontScale + delta, options);
+  };
+
+  const updateEditorBlockWidth = (value: string | number) => {
+    setEditorBlockWidth(normalizeEditorBlockWidth(value));
+  };
+
+  const commitEditorBlockWidthDraft = () => {
+    if (editorBlockWidthDraft.trim() === "") {
+      setEditorBlockWidthDraft(String(editorBlockWidth));
+      return;
+    }
+    updateEditorBlockWidth(editorBlockWidthDraft);
+  };
+
+  const mapVisibleOffsetToSourceIndex = (
+    sourceText: string,
+    visibleText: string,
+    visibleOffset: number,
+  ) => {
+    if (!sourceText) return 0;
+    const clampedVisibleOffset = Math.max(
+      0,
+      Math.min(visibleOffset, visibleText.length),
+    );
+    if (clampedVisibleOffset === 0) return 0;
+
+    const mappedOffsets = new Array(visibleText.length + 1).fill(
+      sourceText.length,
+    );
+    mappedOffsets[0] = 0;
+
+    let sourceIndex = 0;
+    let visibleIndex = 0;
+    while (sourceIndex < sourceText.length && visibleIndex < visibleText.length) {
+      if (sourceText[sourceIndex] === visibleText[visibleIndex]) {
+        visibleIndex += 1;
+        mappedOffsets[visibleIndex] = sourceIndex + 1;
+      }
+      sourceIndex += 1;
+    }
+
+    return mappedOffsets[clampedVisibleOffset] ?? sourceText.length;
+  };
+
+  const getTextOffsetFromPoint = (
+    container: HTMLElement,
+    clientX: number,
+    clientY: number,
+  ) => {
+    const doc = container.ownerDocument;
+    const textLength = container.textContent?.length ?? 0;
+    const docWithCaretApi = doc as Document & {
+      caretPositionFromPoint?: (
+        x: number,
+        y: number,
+      ) => { offsetNode: Node; offset: number } | null;
+      caretRangeFromPoint?: (x: number, y: number) => Range | null;
+    };
+
+    let caretRange: Range | null = null;
+
+    if (typeof docWithCaretApi.caretPositionFromPoint === "function") {
+      const caretPosition = docWithCaretApi.caretPositionFromPoint(
+        clientX,
+        clientY,
+      );
+      if (
+        caretPosition &&
+        container.contains(caretPosition.offsetNode)
+      ) {
+        caretRange = doc.createRange();
+        caretRange.setStart(
+          caretPosition.offsetNode,
+          caretPosition.offset,
+        );
+        caretRange.collapse(true);
+      }
+    } else if (typeof docWithCaretApi.caretRangeFromPoint === "function") {
+      const fallbackRange = docWithCaretApi.caretRangeFromPoint(
+        clientX,
+        clientY,
+      );
+      if (
+        fallbackRange &&
+        container.contains(fallbackRange.startContainer)
+      ) {
+        caretRange = fallbackRange.cloneRange();
+        caretRange.collapse(true);
+      }
+    }
+
+    if (!caretRange) {
+      const rect = container.getBoundingClientRect();
+      const isAfterMidpoint =
+        clientY > rect.top + rect.height / 2 ||
+        clientX > rect.left + rect.width / 2;
+      return isAfterMidpoint ? textLength : 0;
+    }
+
+    const prefixRange = doc.createRange();
+    prefixRange.selectNodeContents(container);
+    prefixRange.setEnd(caretRange.startContainer, caretRange.startOffset);
+    return Math.max(
+      0,
+      Math.min(prefixRange.toString().length, textLength),
+    );
+  };
+
+  const resolveClickCursor = (
+    container: HTMLElement,
+    sourceText: string,
+    clientX: number,
+    clientY: number,
+  ) => {
+    if (!sourceText) return 0;
+    const visibleText = container.textContent ?? "";
+    const visibleOffset = getTextOffsetFromPoint(container, clientX, clientY);
+    return mapVisibleOffsetToSourceIndex(
+      sourceText,
+      visibleText,
+      visibleOffset,
+    );
+  };
+
+  const startInsertAtLocation = (
+    nextCursorIdx: number,
+    nextDerivIdx: number,
+    nextCursor: number,
+  ) => {
+    if (mode === "INSERT" && insertDirtyRef.current && !insertSkipCommitRef.current) {
+      commitToHistory();
+    }
+
+    insertSkipCommitRef.current = false;
+    insertDirtyRef.current = false;
+    insertBaseStateRef.current = {
+      topic: hStateRef.current.topic,
+      cursorIdx: nextCursorIdx,
+      derivIdx: nextDerivIdx,
+    };
+
+    setVisualAnchor(null);
+    setKeyBuffer("");
+    blockChordRef.current = { key: null, at: 0 };
+    normalYankPendingRef.current = false;
+    setNormalYankPending(false);
+    normalDeletePendingRef.current = false;
+    setNormalDeletePending(false);
+    normalChangePendingRef.current = false;
+    setNormalChangePending(false);
+    setSelectionPending(null);
+    setHState((prev) => ({
+      ...prev,
+      cursorIdx: nextCursorIdx,
+      derivIdx: nextDerivIdx,
+    }));
+    syncInsertSelectionState(
+      nextCursorIdx,
+      nextDerivIdx,
+      nextCursor,
+      nextCursor,
+      "none",
+    );
+    setMode("INSERT");
+  };
+
+  const handleTextClick = (
+    event: React.MouseEvent<HTMLDivElement>,
+    block: { cursorIdx: number; derivIdx: number; text: string },
+  ) => {
+    event.preventDefault();
+    const nextCursor = resolveClickCursor(
+      event.currentTarget,
+      block.text,
+      event.clientX,
+      event.clientY,
+    );
+    startInsertAtLocation(block.cursorIdx, block.derivIdx, nextCursor);
+  };
+
+  const openSettingsModal = useCallback(() => {
+    setSettingsTab(guestMode ? "display" : "account");
+    setIsAccountOpen(true);
+  }, [guestMode]);
+
   const applyChangeAndEnterInsert = (text: string, nextCursor: number) => {
     const newTopic = buildTopicWithText(text);
     pushState({ topic: newTopic, cursorIdx, derivIdx });
@@ -2340,6 +2689,29 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
           (mode === "BLOCK" && hasPendingBlockChord));
       if (!isModifierOnlyKey || shouldInterruptWithAlt) clearLiveKeyIndicator();
       syncPressedModifiers(e, true);
+      const isEditorFontIncreaseShortcut =
+        (e.ctrlKey || e.metaKey) &&
+        (e.key === "=" || e.key === "+" || e.key === "Add");
+      const isEditorFontDecreaseShortcut =
+        (e.ctrlKey || e.metaKey) &&
+        (e.key === "-" || e.key === "_" || e.key === "Subtract");
+      if (isEditorFontIncreaseShortcut || isEditorFontDecreaseShortcut) {
+        e.preventDefault();
+        adjustEditorFontScale(
+          isEditorFontIncreaseShortcut
+            ? EDITOR_FONT_SCALE_STEP
+            : -EDITOR_FONT_SCALE_STEP,
+          { toast: true },
+        );
+        return;
+      }
+      if (isAccountOpen) {
+        if (e.key === "Escape") {
+          e.preventDefault();
+          setIsAccountOpen(false);
+        }
+        return;
+      }
       if (e.key === "Alt" && mode === "NORMAL" && hasPendingNormalChord) {
         setKeyBuffer("");
         normalYankPendingRef.current = false;
@@ -3462,19 +3834,6 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
     visualAnchor,
   ]);
 
-  const refreshSession = async () => {
-    if (guestMode) return;
-    const { data } = await auth.getSession();
-    setSessionData(data ?? null);
-    if (data?.session) {
-      try {
-        await syncAuthCookie(data);
-      } catch (error) {
-        console.error("Failed to bootstrap auth cookie", error);
-      }
-    }
-  };
-
   useEffect(() => {
     let isActive = true;
     const fetchSession = async () => {
@@ -3535,6 +3894,12 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
       setBackgroundOpacity(
         normalizeWallpaperOpacity(localStorage.getItem(WALLPAPER_OPACITY_KEY)),
       );
+      setEditorFontScale(
+        normalizeEditorFontScale(localStorage.getItem(EDITOR_FONT_SCALE_KEY)),
+      );
+      setEditorBlockWidth(
+        normalizeEditorBlockWidth(localStorage.getItem(EDITOR_BLOCK_WIDTH_KEY)),
+      );
       const storedShowKeyBuffer = localStorage.getItem(SHOW_KEY_BUFFER_KEY);
       if (storedShowKeyBuffer !== null) {
         setShowKeyBuffer(storedShowKeyBuffer === "true");
@@ -3545,13 +3910,6 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
       setHasLoadedClientPrefs(true);
     }
   }, []);
-
-  useEffect(() => {
-    setProfileForm({
-      name: (user?.name || user?.displayName || "") as string,
-      email: (user?.email || "") as string,
-    });
-  }, [user?.name, user?.displayName, user?.email]);
 
   useEffect(() => {
     if (useLocalPersistence) return;
@@ -3864,6 +4222,24 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
   }, [hasLoadedClientPrefs, showKeyBuffer]);
 
   useEffect(() => {
+    if (!hasLoadedClientPrefs) return;
+    try {
+      localStorage.setItem(EDITOR_FONT_SCALE_KEY, String(editorFontScale));
+    } catch {
+      // ignore storage errors
+    }
+  }, [editorFontScale, hasLoadedClientPrefs]);
+
+  useEffect(() => {
+    if (!hasLoadedClientPrefs) return;
+    try {
+      localStorage.setItem(EDITOR_BLOCK_WIDTH_KEY, String(editorBlockWidth));
+    } catch {
+      // ignore storage errors
+    }
+  }, [editorBlockWidth, hasLoadedClientPrefs]);
+
+  useEffect(() => {
     let cancelled = false;
 
     const loadWallpapers = async () => {
@@ -3942,10 +4318,24 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
 
   useEffect(() => {
     if (mode === "INSERT" && inputRef.current) {
+      const selection =
+        insertSelection &&
+        insertSelection.cursorIdx === cursorIdx &&
+        insertSelection.derivIdx === derivIdx
+          ? insertSelection
+          : {
+              start: normalCursor,
+              end: normalCursor,
+              direction: "none" as const,
+            };
       inputRef.current.focus();
-      inputRef.current.setSelectionRange(normalCursor, normalCursor);
+      inputRef.current.setSelectionRange(
+        selection.start,
+        selection.end,
+        selection.direction,
+      );
     }
-  }, [mode, normalCursor]);
+  }, [mode, normalCursor, cursorIdx, derivIdx, insertSelection]);
 
   useEffect(() => {
     return () => {
@@ -3999,35 +4389,93 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
       yankFlash.derivIdx === block.derivIdx;
     const yankFlashStart = isYankFlash ? yankFlash!.start : -1;
     const yankFlashEnd = isYankFlash ? yankFlash!.end : -1;
+    const activeInsertSelection =
+      mode === "INSERT" &&
+      insertSelection &&
+      insertSelection.cursorIdx === block.cursorIdx &&
+      insertSelection.derivIdx === block.derivIdx
+        ? insertSelection
+        : null;
+    const hasInsertSelection =
+      !!activeInsertSelection &&
+      activeInsertSelection.start !== activeInsertSelection.end;
+    const insertSelectionStart = hasInsertSelection
+      ? activeInsertSelection!.start
+      : -1;
+    const insertSelectionEnd = hasInsertSelection
+      ? activeInsertSelection!.end
+      : -1;
 
     const matchClass = isFocused
       ? "bg-[#ff9e64] text-[#1a1b26]"
       : "bg-[#e0af68] text-[#1a1b26]";
 
     if (mode === "INSERT") {
-      if (hasSearch && sQuery) {
-        const regex = new RegExp(
-          `(${sQuery.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")})`,
-          "gi",
-        );
-        const parts = text.split(regex);
+      if ((hasSearch && sQuery) || hasInsertSelection) {
+        const ranges: { start: number; end: number }[] = [];
+        if (hasSearch && sQuery) {
+          const regex = new RegExp(
+            sQuery.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"),
+            "gi",
+          );
+          let match;
+          while ((match = regex.exec(text)) !== null) {
+            ranges.push({
+              start: match.index,
+              end: match.index + match[0].length,
+            });
+          }
+        }
+
+        const chars = text.split("");
         return (
           <span>
-            {parts.map((part, i) =>
-              part.toLowerCase() === sQuery.toLowerCase() ? (
-                <span key={i} className={matchClass}>
-                  {part}
-                </span>
-              ) : (
+            {chars.map((char, i) => {
+              const isMatch = ranges.some((r) => i >= r.start && i < r.end);
+              const isSelected =
+                hasInsertSelection &&
+                i >= insertSelectionStart &&
+                i < insertSelectionEnd;
+              const className = isSelected
+                ? "bg-[#ff9e64] text-[#1a1b26] rounded-sm"
+                : isMatch
+                  ? matchClass
+                  : "";
+
+              if (char === "\n" && isSelected) {
+                return (
+                  <span key={i}>
+                    <span className="bg-[#ff9e64] text-[#1a1b26] rounded-sm">
+                      &nbsp;
+                    </span>
+                    {char}
+                  </span>
+                );
+              }
+
+              return (
                 <span
                   key={i}
-                  className={!text && i === 0 ? "opacity-30 italic" : ""}
+                  className={`${className} ${!text && i === 0 ? "opacity-30 italic" : ""}`.trim()}
                 >
-                  {part || (text ? "" : "Empty...")}
+                  {char}
                 </span>
-              ),
+              );
+            })}
+            {!text && <span className="opacity-30 italic">Empty...</span>}
+            {text.endsWith("\n") && (
+              <span className="block">
+                {hasInsertSelection &&
+                insertSelectionStart < text.length &&
+                insertSelectionEnd === text.length ? (
+                  <span className="bg-[#ff9e64] text-[#1a1b26] rounded-sm">
+                    &nbsp;
+                  </span>
+                ) : (
+                  <span>&nbsp;</span>
+                )}
+              </span>
             )}
-            {text.endsWith("\n") && <span className="block">&nbsp;</span>}
           </span>
         );
       }
@@ -4355,6 +4803,10 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
             keys="Alt+Esc / Alt+[ / Ctrl+["
             description="Return directly to Block mode"
           />
+          <LegendItem
+            keys="Ctrl + +/-"
+            description="Adjust the editor font size"
+          />
         </div>
       );
 
@@ -4426,6 +4878,10 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
           <LegendItem keys="n / N" description="Next / previous search match" />
           <LegendItem keys="u" description="Undo last change" />
           <LegendItem keys="r" description="Redo last undo" />
+          <LegendItem
+            keys="Ctrl + +/-"
+            description="Adjust the editor font size"
+          />
         </div>
       );
     }
@@ -4493,6 +4949,10 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
           <LegendItem keys="c" description="Begin change chord" />
           <LegendItem keys="Space" description="More actions..." />
           <LegendItem keys="/" description="Search across the topic" />
+          <LegendItem
+            keys="Ctrl + +/-"
+            description="Adjust the editor font size"
+          />
         </div>
       );
     }
@@ -4580,7 +5040,7 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
           <div className="flex gap-2 items-center">
             <button
               className="h-8 w-8 rounded-full border border-[#2a2f45] bg-[#1f2335] text-[10px] font-bold text-[#c0caf5] shadow-md hover:border-[#7aa2f7]/60 hover:bg-[#24283b] transition"
-              onClick={() => setIsAccountOpen(true)}
+              onClick={openSettingsModal}
               aria-label={
                 guestMode ? "Open workspace settings" : "Open account settings"
               }
@@ -4616,7 +5076,11 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
         className="relative flex-1 overflow-y-auto p-8 pt-24"
         data-testid="scroll-container"
       >
-        <div className="max-w-3xl mx-auto pb-20 space-y-6">
+        <div
+          className="mx-auto w-full pb-20 space-y-6"
+          style={{ maxWidth: `${editorBlockWidth}px` }}
+          data-testid="editor-blocks-container"
+        >
           {topic.concepts.map((concept, cIdx) => {
             const isConceptActive = cursorIdx === cIdx && derivIdx === -1;
             const isConceptContextActive = cursorIdx === cIdx;
@@ -4685,7 +5149,10 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
                   >
                     {String(cIdx + 1).padStart(2, "0")}
                   </span>
-                  <div className="flex-1 text-lg leading-relaxed relative font-mono">
+                  <div
+                    className="flex-1 text-lg leading-relaxed relative font-mono"
+                    style={conceptTypographyStyle}
+                  >
                     {mode === "INSERT" &&
                       cursorIdx === cIdx &&
                       derivIdx === -1 && (
@@ -4694,22 +5161,40 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
                           value={concept.text}
                           onChange={(e) => {
                             updateText(e.target.value);
-                            setCursor(e.target.selectionStart);
+                            syncInsertSelectionFromTextarea(
+                              e.currentTarget,
+                              cIdx,
+                              -1,
+                            );
                           }}
                           onSelect={(e) =>
-                            setCursor(e.currentTarget.selectionStart)
+                            syncInsertSelectionFromTextarea(
+                              e.currentTarget,
+                              cIdx,
+                              -1,
+                            )
                           }
                           className="absolute inset-0 w-full h-full bg-transparent text-transparent caret-[#ff9e64] outline-none resize-none overflow-hidden z-10 font-mono text-lg leading-relaxed"
+                          style={conceptTypographyStyle}
                           spellCheck={false}
                         />
                       )}
                     <div
-                      className={`break-words min-h-[1.5em] text-[#c0caf5] ${shouldRenderConceptMarkdown ? "engram-markdown whitespace-normal" : "whitespace-pre-wrap"} ${conceptTextAccent}`}
+                      className={`break-words min-h-[1.5em] cursor-text text-[#c0caf5] ${shouldRenderConceptMarkdown ? "engram-markdown whitespace-normal" : "whitespace-pre-wrap"} ${conceptTextAccent}`}
                       style={{
                         overflowWrap: "anywhere",
                         wordBreak: "break-word",
+                        ...conceptTypographyStyle,
                         ...clampStyle(shouldClampConcept),
                       }}
+                      onMouseDown={(event) => event.preventDefault()}
+                      onClick={(event) =>
+                        handleTextClick(event, {
+                          cursorIdx: cIdx,
+                          derivIdx: -1,
+                          text: concept.text,
+                        })
+                      }
                       data-testid={`concept-text-${cIdx}`}
                       data-cursor-index={
                         mode === "NORMAL" &&
@@ -4833,7 +5318,10 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
                               [{candidateIndex}]
                             </span>
                           )}
-                          <div className="flex-1 text-sm opacity-90 relative font-mono">
+                          <div
+                            className="flex-1 text-sm opacity-90 relative font-mono"
+                            style={derivativeTypographyStyle}
+                          >
                             {mode === "INSERT" &&
                               cursorIdx === cIdx &&
                               derivIdx === dIdx && (
@@ -4842,22 +5330,40 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
                                   value={deriv.text}
                                   onChange={(e) => {
                                     updateText(e.target.value);
-                                    setCursor(e.target.selectionStart);
+                                    syncInsertSelectionFromTextarea(
+                                      e.currentTarget,
+                                      cIdx,
+                                      dIdx,
+                                    );
                                   }}
                                   onSelect={(e) =>
-                                    setCursor(e.currentTarget.selectionStart)
+                                    syncInsertSelectionFromTextarea(
+                                      e.currentTarget,
+                                      cIdx,
+                                      dIdx,
+                                    )
                                   }
                                   className="absolute inset-0 w-full h-full bg-transparent text-transparent caret-[#ff9e64] outline-none resize-none overflow-hidden z-10 font-mono text-sm"
+                                  style={derivativeTypographyStyle}
                                   spellCheck={false}
                                 />
                               )}
                             <div
-                              className={`break-words min-h-[1.5em] text-[#a9b1d6] ${shouldRenderDerivMarkdown ? "engram-markdown whitespace-normal" : "whitespace-pre-wrap"} ${derivativeTextAccent}`}
+                              className={`break-words min-h-[1.5em] cursor-text text-[#a9b1d6] ${shouldRenderDerivMarkdown ? "engram-markdown whitespace-normal" : "whitespace-pre-wrap"} ${derivativeTextAccent}`}
                               style={{
                                 overflowWrap: "anywhere",
                                 wordBreak: "break-word",
+                                ...derivativeTypographyStyle,
                                 ...clampStyle(shouldClampDeriv),
                               }}
+                              onMouseDown={(event) => event.preventDefault()}
+                              onClick={(event) =>
+                                handleTextClick(event, {
+                                  cursorIdx: cIdx,
+                                  derivIdx: dIdx,
+                                  text: deriv.text,
+                                })
+                              }
                               data-testid={`derivative-text-${cIdx}-${dIdx}`}
                             >
                               {shouldRenderDerivMarkdown ? (
@@ -4942,7 +5448,10 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
       </div>
 
       {isAccountOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#0b0e17]/80">
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-[#0b0e17]/80"
+          data-testid="settings-modal"
+        >
           <div className="w-[min(920px,92vw)] max-h-[85vh] overflow-hidden rounded-2xl border border-[#22283a] bg-[#141821] shadow-[0_30px_80px_rgba(6,8,14,0.65)]">
             <div className="flex items-center justify-between border-b border-[#1f2536] bg-[#171c28] px-5 py-4">
               <div className="flex items-center gap-3">
@@ -4955,12 +5464,12 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
                 />
                 <div>
                   <div className="text-sm font-bold tracking-[0.2em] text-[#cbd3f2]">
-                    {guestMode ? "SETTINGS" : "ACCOUNT"}
+                    SETTINGS
                   </div>
                   <div className="text-sm text-[#94a0c6]">
                     {guestMode
                       ? "Manage display settings and local workspace preferences"
-                      : "Manage your profile, security, and display"}
+                      : "Manage account details and workspace preferences"}
                   </div>
                 </div>
               </div>
@@ -4991,474 +5500,420 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
                 )}
               </div>
             </div>
-            <div className="max-h-[calc(85vh-64px)] overflow-y-auto p-5 space-y-5">
-              {guestMode && (
-                <div className="rounded-xl border border-[#2c3b1f] bg-[linear-gradient(135deg,rgba(158,206,106,0.16),rgba(20,24,33,0.96))] p-4">
-                  <div className="text-sm font-bold tracking-[0.18em] text-[#d8f6b3]">
-                    GUEST SESSION
-                  </div>
-                  <div className="mt-1 text-sm text-[#b7c7a4]">
-                    Display settings are available here. Guest notes and
-                    preferences stay in this browser using local storage.
-                  </div>
-                </div>
-              )}
-              {!guestMode && (
-                <div className="rounded-xl border border-[#22283a] bg-[#161b27] p-4">
-                  <div className="text-sm font-bold tracking-[0.2em] text-[#cbd3f2]">
-                    PROFILE
-                  </div>
-                  <div className="mt-4 grid gap-4 md:grid-cols-[140px_1fr]">
-                    <div className="flex flex-col items-start gap-3">
-                      <div className="h-16 w-16 rounded-full border border-[#283049] bg-[#101521] overflow-hidden">
-                        {!guestMode && user?.image ? (
-                          <Image
-                            src={user.image}
-                            alt={userName}
-                            className="h-full w-full object-cover"
-                            width={64}
-                            height={64}
-                            unoptimized
-                          />
-                        ) : (
-                          <div className="h-full w-full flex items-center justify-center text-sm font-bold text-[#9bb2ff]">
-                            {initials}
-                          </div>
-                        )}
-                      </div>
-                      <div className="flex flex-col gap-2">
-                        <label className="text-sm uppercase tracking-[0.2em] text-[#7f8bb4]">
-                          Avatar
-                        </label>
-                        <div className="flex items-center gap-2">
-                          <input
-                            id="avatar-upload"
-                            type="file"
-                            accept="image/*"
-                            className="hidden"
-                            onChange={async (e) => {
-                              const file = e.target.files?.[0];
-                              if (!file) return;
-                              setAvatarStatus({ type: "saving" });
-                              try {
-                                const dataUrl = await new Promise<string>(
-                                  (resolve, reject) => {
-                                    const reader = new FileReader();
-                                    reader.onload = () =>
-                                      resolve(String(reader.result));
-                                    reader.onerror = () =>
-                                      reject(
-                                        new Error("Avatar upload failed."),
-                                      );
-                                    reader.readAsDataURL(file);
-                                  },
-                                );
-                                const parsed = updateAvatarSchema.parse({
-                                  image: dataUrl,
-                                });
-                                await auth.updateUser({
-                                  ...parsed,
-                                  fetchOptions: { throw: true },
-                                });
-                                await refreshSession();
-                                setAvatarStatus({
-                                  type: "success",
-                                  message: "Avatar updated.",
-                                });
-                              } catch (error: any) {
-                                setAvatarStatus({
-                                  type: "error",
-                                  message:
-                                    error?.message ||
-                                    "Failed to update avatar.",
-                                });
-                              } finally {
-                                e.target.value = "";
-                              }
-                            }}
-                          />
-                          <button
-                            className="text-sm font-bold px-2.5 py-1 rounded border border-[#2a3350] text-[#9bb2ff] hover:bg-[#2a3350]/30 transition"
-                            onClick={() =>
-                              document.getElementById("avatar-upload")?.click()
-                            }
-                            disabled={avatarStatus.type === "saving"}
-                          >
-                            Upload
-                          </button>
-                          {user?.image && (
-                            <button
-                              className="text-sm font-bold px-2.5 py-1 rounded border border-[#3a2530] text-[#ff9aaa] hover:bg-[#3a2530]/40 transition"
-                              onClick={async () => {
-                                setAvatarStatus({ type: "saving" });
-                                try {
-                                  const parsed = updateAvatarSchema.parse({
-                                    image: null,
-                                  });
-                                  await auth.updateUser({
-                                    ...parsed,
-                                    fetchOptions: { throw: true },
-                                  });
-                                  await refreshSession();
-                                  setAvatarStatus({
-                                    type: "success",
-                                    message: "Avatar removed.",
-                                  });
-                                } catch (error: any) {
-                                  setAvatarStatus({
-                                    type: "error",
-                                    message:
-                                      error?.message ||
-                                      "Failed to remove avatar.",
-                                  });
-                                }
-                              }}
-                              disabled={avatarStatus.type === "saving"}
-                            >
-                              Remove
-                            </button>
-                          )}
-                        </div>
-                        {avatarStatus.message && (
-                          <div
-                            className={`text-sm ${avatarStatus.type === "error" ? "text-[#ff9aaa]" : "text-[#9ece6a]"}`}
-                          >
-                            {avatarStatus.message}
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                    <div className="space-y-3">
-                      <div>
-                        <label className="text-sm uppercase tracking-[0.2em] text-[#7f8bb4]">
-                          Name
-                        </label>
-                        <input
-                          value={profileForm.name}
-                          onChange={(e) =>
-                            setProfileForm((prev) => ({
-                              ...prev,
-                              name: e.target.value,
-                            }))
-                          }
-                          className="mt-1 w-full rounded-lg border border-[#283049] bg-[#101521] px-3 py-2 text-base text-[#cbd3f2] outline-none focus:border-[#5b79d6]/70"
-                          placeholder="Your name"
-                        />
-                      </div>
-                      <div>
-                        <label className="text-sm uppercase tracking-[0.2em] text-[#7f8bb4]">
-                          Email
-                        </label>
-                        <input
-                          type="email"
-                          value={profileForm.email}
-                          onChange={(e) =>
-                            setProfileForm((prev) => ({
-                              ...prev,
-                              email: e.target.value,
-                            }))
-                          }
-                          className="mt-1 w-full rounded-lg border border-[#283049] bg-[#101521] px-3 py-2 text-base text-[#cbd3f2] outline-none focus:border-[#5b79d6]/70"
-                          placeholder="you@example.com"
-                        />
-                      </div>
-                      <div className="flex items-center gap-3">
-                        <button
-                          className="text-sm font-bold px-3 py-1.5 rounded border border-[#2a3350] text-[#9bb2ff] hover:bg-[#2a3350]/30 transition"
-                          onClick={async () => {
-                            setProfileStatus({ type: "saving" });
-                            try {
-                              const updates: Record<string, string> = {};
-                              const nextName = profileForm.name.trim();
-                              const nextEmail = profileForm.email.trim();
-                              if (
-                                nextName &&
-                                nextName !== user?.name &&
-                                nextName !== user?.displayName
-                              )
-                                updates.name = nextName;
-                              if (nextEmail && nextEmail !== user?.email)
-                                updates.email = nextEmail;
-                              if (Object.keys(updates).length === 0) {
-                                setProfileStatus({
-                                  type: "error",
-                                  message: "No changes to save.",
-                                });
-                                return;
-                              }
-                              const parsed = updateProfileSchema.parse(updates);
-                              await auth.updateUser({
-                                ...parsed,
-                                fetchOptions: { throw: true },
-                              });
-                              await refreshSession();
-                              setProfileStatus({
-                                type: "success",
-                                message: "Profile updated.",
-                              });
-                            } catch (error: any) {
-                              setProfileStatus({
-                                type: "error",
-                                message:
-                                  error?.message || "Failed to update profile.",
-                              });
-                            }
-                          }}
-                          disabled={profileStatus.type === "saving"}
-                        >
-                          Save profile
-                        </button>
-                        {profileStatus.message && (
-                          <span
-                            className={`text-sm ${profileStatus.type === "error" ? "text-[#ff9aaa]" : "text-[#9ece6a]"}`}
-                          >
-                            {profileStatus.message}
-                          </span>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              {!guestMode && (
-                <div className="rounded-xl border border-[#22283a] bg-[#161b27] p-4">
-                  <div className="text-sm font-bold tracking-[0.2em] text-[#cbd3f2]">
-                    SECURITY
-                  </div>
-                  <div className="mt-4 space-y-3">
-                    <div>
-                      <label className="text-sm uppercase tracking-[0.2em] text-[#7f8bb4]">
-                        Current password
-                      </label>
-                      <input
-                        type="password"
-                        value={passwordForm.currentPassword}
-                        onChange={(e) =>
-                          setPasswordForm((prev) => ({
-                            ...prev,
-                            currentPassword: e.target.value,
-                          }))
-                        }
-                        className="mt-1 w-full rounded-lg border border-[#283049] bg-[#101521] px-3 py-2 text-base text-[#cbd3f2] outline-none focus:border-[#5b79d6]/70"
-                        placeholder="••••••••"
-                      />
-                    </div>
-                    <div>
-                      <label className="text-sm uppercase tracking-[0.2em] text-[#7f8bb4]">
-                        New password
-                      </label>
-                      <input
-                        type="password"
-                        value={passwordForm.newPassword}
-                        onChange={(e) =>
-                          setPasswordForm((prev) => ({
-                            ...prev,
-                            newPassword: e.target.value,
-                          }))
-                        }
-                        className="mt-1 w-full rounded-lg border border-[#283049] bg-[#101521] px-3 py-2 text-base text-[#cbd3f2] outline-none focus:border-[#5b79d6]/70"
-                        placeholder="At least 8 characters"
-                      />
-                    </div>
-                    <div>
-                      <label className="text-sm uppercase tracking-[0.2em] text-[#7f8bb4]">
-                        Confirm new password
-                      </label>
-                      <input
-                        type="password"
-                        value={passwordForm.confirmPassword}
-                        onChange={(e) =>
-                          setPasswordForm((prev) => ({
-                            ...prev,
-                            confirmPassword: e.target.value,
-                          }))
-                        }
-                        className="mt-1 w-full rounded-lg border border-[#283049] bg-[#101521] px-3 py-2 text-base text-[#cbd3f2] outline-none focus:border-[#5b79d6]/70"
-                        placeholder="Repeat new password"
-                      />
-                    </div>
-                    <div className="flex items-center gap-3">
-                      <button
-                        className="text-sm font-bold px-3 py-1.5 rounded border border-[#2a3350] text-[#9bb2ff] hover:bg-[#2a3350]/30 transition"
-                        onClick={async () => {
-                          setPasswordStatus({ type: "saving" });
-                          try {
-                            const parsed =
-                              changePasswordSchema.parse(passwordForm);
-                            await auth.changePassword({
-                              currentPassword: parsed.currentPassword,
-                              newPassword: parsed.newPassword,
-                              revokeOtherSessions: true,
-                              fetchOptions: { throw: true },
-                            });
-                            setPasswordForm({
-                              currentPassword: "",
-                              newPassword: "",
-                              confirmPassword: "",
-                            });
-                            setPasswordStatus({
-                              type: "success",
-                              message: "Password updated.",
-                            });
-                          } catch (error: any) {
-                            setPasswordStatus({
-                              type: "error",
-                              message:
-                                error?.message || "Failed to update password.",
-                            });
-                          }
-                        }}
-                        disabled={passwordStatus.type === "saving"}
-                      >
-                        Update password
-                      </button>
-                      {passwordStatus.message && (
-                        <span
-                          className={`text-sm ${passwordStatus.type === "error" ? "text-[#ff9aaa]" : "text-[#9ece6a]"}`}
-                        >
-                          {passwordStatus.message}
-                        </span>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              <div className="rounded-xl border border-[#22283a] bg-[#161b27] p-4">
-                <div className="text-sm font-bold tracking-[0.2em] text-[#cbd3f2]">
-                  DISPLAY
-                </div>
-                <div className="mt-4 space-y-4">
-                  <div className="flex items-center justify-between gap-4">
-                    <div>
-                      <div className="text-sm font-bold text-[#cbd3f2]">
-                        Keybuffer legend
-                      </div>
-                      <div className="text-sm text-[#94a0c6]">
-                        Show the chord helper on the right
-                      </div>
-                    </div>
+            <div className="max-h-[calc(85vh-64px)] overflow-y-auto p-5">
+              <div className="space-y-5">
+                {!guestMode && (
+                  <div
+                    className="flex flex-wrap gap-2 rounded-xl border border-[#22283a] bg-[#111622]/80 p-2"
+                    role="tablist"
+                    aria-label="Settings sections"
+                    data-testid="settings-tablist"
+                  >
                     <button
-                      className={`text-sm font-bold px-2 py-1 rounded border transition ${showKeyBuffer ? "border-[#5b79d6]/50 text-[#9bb2ff] hover:bg-[#5b79d6]/15" : "border-[#262c3f] text-[#94a0c6] hover:bg-[#1f2536]"}`}
-                      onClick={() => setShowKeyBuffer((prev) => !prev)}
+                      type="button"
+                      role="tab"
+                      aria-selected={settingsTab === "account"}
+                      className={`rounded-xl border px-3 py-2 text-sm font-bold transition ${
+                        settingsTab === "account"
+                          ? "border-[#5b79d6]/60 bg-[#1a2235] text-[#e3e8ff]"
+                          : "border-[#252c40] text-[#aab4d7] hover:bg-[#1d2334]"
+                      }`}
+                      onClick={() => setSettingsTab("account")}
+                      data-testid="settings-tab-account"
                     >
-                      {showKeyBuffer ? "ON" : "OFF"}
+                      Account
+                    </button>
+                    <button
+                      type="button"
+                      role="tab"
+                      aria-selected={settingsTab === "display"}
+                      className={`rounded-xl border px-3 py-2 text-sm font-bold transition ${
+                        settingsTab === "display"
+                          ? "border-[#5b79d6]/60 bg-[#1a2235] text-[#e3e8ff]"
+                          : "border-[#252c40] text-[#aab4d7] hover:bg-[#1d2334]"
+                      }`}
+                      onClick={() => setSettingsTab("display")}
+                      data-testid="settings-tab-display"
+                    >
+                      Display
                     </button>
                   </div>
+                )}
 
-                  <div className="rounded-xl border border-[#22283a] bg-[#101521]/80 p-3">
-                    <div className="flex items-start justify-between gap-3">
-                      <div>
-                        <div className="text-sm font-bold text-[#cbd3f2]">
-                          Workspace wallpaper
-                        </div>
-                        <div className="text-sm text-[#94a0c6]">
-                          Choose a JPG or PNG from `/public`. Labels come
-                          directly from each filename.
-                        </div>
-                      </div>
-                      <div className="text-sm text-[#7f8bb4]">
-                        {wallpaperLoadStatus === "loading" && "Loading…"}
-                        {wallpaperLoadStatus === "ready" &&
-                          `${wallpaperOptions.length} available`}
-                        {wallpaperLoadStatus === "error" && "Unavailable"}
-                      </div>
+                {guestMode && (
+                  <div className="rounded-xl border border-[#2c3b1f] bg-[linear-gradient(135deg,rgba(158,206,106,0.16),rgba(20,24,33,0.96))] p-4">
+                    <div className="text-sm font-bold tracking-[0.18em] text-[#d8f6b3]">
+                      GUEST SESSION
                     </div>
+                    <div className="mt-1 text-sm text-[#b7c7a4]">
+                      Display settings are available here. Guest notes and
+                      preferences stay in this browser using local storage.
+                    </div>
+                  </div>
+                )}
 
-                    <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-                      <button
-                        type="button"
-                        className={`rounded-xl border text-left transition ${selectedWallpaperFilename === null ? "border-[#7aa2f7]/70 bg-[#1a2338]" : "border-[#22283a] bg-[#121826] hover:border-[#465176]"}`}
-                        onClick={() => setSelectedWallpaperFilename(null)}
-                        aria-pressed={selectedWallpaperFilename === null}
-                      >
-                        <div className="flex h-28 items-center justify-center bg-[radial-gradient(circle_at_top,rgba(122,162,247,0.18),rgba(16,21,33,0.96)_70%)]">
-                          <div className="rounded-full border border-[#2a3350] px-3 py-1 text-sm font-bold tracking-[0.2em] text-[#9bb2ff]">
-                            DEFAULT
+                {!guestMode && settingsTab === "account" ? (
+                  accountInitialData ? (
+                    <Account
+                      initialSection="settings"
+                      initialData={accountInitialData}
+                      variant="embedded"
+                      onOpenWorkspaceSettings={() => setSettingsTab("display")}
+                    />
+                  ) : (
+                    <div className="rounded-xl border border-[#22283a] bg-[#161b27] p-5 text-sm text-[#94a0c6]">
+                      Loading account settings...
+                    </div>
+                  )
+                ) : (
+                  <div className="rounded-xl border border-[#22283a] bg-[#161b27] p-4">
+                    <div className="text-sm font-bold tracking-[0.2em] text-[#cbd3f2]">
+                      DISPLAY
+                    </div>
+                    <div className="mt-4 space-y-4">
+                      <div className="flex items-center justify-between gap-4">
+                        <div>
+                          <div className="text-sm font-bold text-[#cbd3f2]">
+                            Keybuffer legend
+                          </div>
+                          <div className="text-sm text-[#94a0c6]">
+                            Show the chord helper on the right
                           </div>
                         </div>
-                      </button>
+                        <button
+                          className={`text-sm font-bold px-2 py-1 rounded border transition ${showKeyBuffer ? "border-[#5b79d6]/50 text-[#9bb2ff] hover:bg-[#5b79d6]/15" : "border-[#262c3f] text-[#94a0c6] hover:bg-[#1f2536]"}`}
+                          onClick={() => setShowKeyBuffer((prev) => !prev)}
+                        >
+                          {showKeyBuffer ? "ON" : "OFF"}
+                        </button>
+                      </div>
 
-                      {wallpaperOptions.map((option) => {
-                        const isSelected =
-                          option.filename === selectedWallpaperFilename;
-                        return (
-                          <button
-                            key={option.filename}
-                            type="button"
-                            className={`group overflow-hidden rounded-xl border text-left transition ${isSelected ? "border-[#7aa2f7]/70 bg-[#1a2338]" : "border-[#22283a] bg-[#121826] hover:border-[#465176]"}`}
-                            onClick={() =>
-                              setSelectedWallpaperFilename(option.filename)
-                            }
-                            aria-pressed={isSelected}
-                            data-testid={`wallpaper-option-${option.filename}`}
-                          >
-                            <div className="relative h-28 overflow-hidden bg-[#0d111b]">
-                              <div
-                                className="absolute inset-[-10%] bg-cover bg-center transition duration-300 group-hover:scale-105"
-                                style={{
-                                  backgroundImage: `url("${option.src}")`,
-                                }}
+                      <div className="rounded-xl border border-[#22283a] bg-[#101521]/80 p-3">
+                        <div className="flex items-start justify-between gap-3">
+                          <div>
+                            <div className="text-sm font-bold text-[#cbd3f2]">
+                              Editor layout
+                            </div>
+                            <div className="text-sm text-[#94a0c6]">
+                              Font size and block width update the workspace immediately and stay in this browser.
+                            </div>
+                          </div>
+                          <div className="text-sm text-[#7f8bb4]">
+                            {editorFontPercent}% · {editorBlockWidth}px
+                          </div>
+                        </div>
+
+                        <div className="mt-4 space-y-4">
+                          <div className="space-y-2">
+                            <div className="flex items-center justify-between text-sm">
+                              <span className="font-bold text-[#cbd3f2]">
+                                Editor font size
+                              </span>
+                              <span className="text-[#9bb2ff]">
+                                {editorFontPercent}%
+                              </span>
+                            </div>
+                            <div className="flex items-center gap-3">
+                              <button
+                                type="button"
+                                className="h-9 w-9 rounded-lg border border-[#2a3350] text-lg font-bold text-[#9bb2ff] transition hover:bg-[#2a3350]/30"
+                                onClick={() =>
+                                  adjustEditorFontScale(
+                                    -EDITOR_FONT_SCALE_STEP,
+                                  )
+                                }
+                                aria-label="Decrease editor font size"
+                              >
+                                -
+                              </button>
+                              <input
+                                type="range"
+                                min={MIN_EDITOR_FONT_SCALE * 100}
+                                max={MAX_EDITOR_FONT_SCALE * 100}
+                                step={EDITOR_FONT_SCALE_STEP * 100}
+                                value={editorFontPercent}
+                                onChange={(e) =>
+                                  updateEditorFontScale(
+                                    Number(e.target.value) / 100,
+                                  )
+                                }
+                                className="w-full accent-[#7aa2f7]"
+                                data-testid="editor-font-size-slider"
                               />
-                              <div className="absolute inset-0 bg-gradient-to-t from-[#0b0e17] via-[#0b0e17]/20 to-transparent" />
-                              <div className="absolute bottom-2 left-3 right-3 text-sm font-bold text-[#f3f6ff] drop-shadow-[0_0_10px_rgba(0,0,0,0.85)]">
-                                {option.name}
+                              <button
+                                type="button"
+                                className="h-9 w-9 rounded-lg border border-[#2a3350] text-lg font-bold text-[#9bb2ff] transition hover:bg-[#2a3350]/30"
+                                onClick={() =>
+                                  adjustEditorFontScale(
+                                    EDITOR_FONT_SCALE_STEP,
+                                  )
+                                }
+                                aria-label="Increase editor font size"
+                              >
+                                +
+                              </button>
+                            </div>
+                            <div className="flex items-center gap-3">
+                              <input
+                                type="number"
+                                min={MIN_EDITOR_FONT_SCALE * 100}
+                                max={MAX_EDITOR_FONT_SCALE * 100}
+                                step={EDITOR_FONT_SCALE_STEP * 100}
+                                value={editorFontPercentDraft}
+                                onChange={(e) =>
+                                  setEditorFontPercentDraft(e.target.value)
+                                }
+                                onBlur={commitEditorFontScaleDraft}
+                                onKeyDown={(e) => {
+                                  if (e.key === "Enter") {
+                                    e.preventDefault();
+                                    e.currentTarget.blur();
+                                  }
+                                }}
+                                className="w-28 rounded-lg border border-[#283049] bg-[#0d1320] px-3 py-2 text-sm text-[#cbd3f2] outline-none transition focus:border-[#5b79d6]/70"
+                                inputMode="numeric"
+                                data-testid="editor-font-size-input"
+                              />
+                              <span className="text-sm text-[#94a0c6]">
+                                % in 5% increments
+                              </span>
+                            </div>
+                            <div className="text-sm text-[#94a0c6]">
+                              Shortcut: Ctrl/Cmd + plus or minus. Range: 50% to
+                              300%.
+                            </div>
+                          </div>
+
+                          <div className="space-y-2">
+                            <div className="flex items-center justify-between text-sm">
+                              <span className="font-bold text-[#cbd3f2]">
+                                Block width
+                              </span>
+                              <span className="text-[#9bb2ff]">
+                                {editorBlockWidth}px
+                              </span>
+                            </div>
+                            <input
+                              type="range"
+                              min={MIN_EDITOR_BLOCK_WIDTH}
+                              max={MAX_EDITOR_BLOCK_WIDTH}
+                              step={EDITOR_BLOCK_WIDTH_STEP}
+                              value={editorBlockWidth}
+                              onChange={(e) =>
+                                updateEditorBlockWidth(e.target.value)
+                              }
+                              className="w-full accent-[#7aa2f7]"
+                              data-testid="editor-block-width-slider"
+                            />
+                            <div className="flex items-center gap-3">
+                              <input
+                                type="number"
+                                min={MIN_EDITOR_BLOCK_WIDTH}
+                                max={MAX_EDITOR_BLOCK_WIDTH}
+                                step={1}
+                                value={editorBlockWidthDraft}
+                                onChange={(e) =>
+                                  setEditorBlockWidthDraft(e.target.value)
+                                }
+                                onBlur={commitEditorBlockWidthDraft}
+                                onKeyDown={(e) => {
+                                  if (e.key === "Enter") {
+                                    e.preventDefault();
+                                    e.currentTarget.blur();
+                                  }
+                                }}
+                                className="w-32 rounded-lg border border-[#283049] bg-[#0d1320] px-3 py-2 text-sm text-[#cbd3f2] outline-none transition focus:border-[#5b79d6]/70"
+                                inputMode="numeric"
+                                data-testid="editor-block-width-input"
+                              />
+                              <span className="text-sm text-[#94a0c6]">
+                                px, up to 3840
+                              </span>
+                            </div>
+                            <div className="text-sm text-[#94a0c6]">
+                              Wider layouts leave more room for long concepts and nested derivatives.
+                            </div>
+                          </div>
+
+                          <div className="rounded-xl border border-[#22283a] bg-[#0d1320] p-3">
+                            <div className="flex items-center justify-between gap-3">
+                              <div className="text-sm font-bold text-[#cbd3f2]">
+                                Live preview
                               </div>
-                              {isSelected && (
-                                <div className="absolute right-2 top-2 rounded-full border border-[#7aa2f7]/60 bg-[#141b29]/85 px-2 py-0.5 text-xs font-bold text-[#9bb2ff]">
-                                  Selected
+                              <div className="text-sm text-[#7f8bb4]">
+                                Scroll horizontally for wider layouts.
+                              </div>
+                            </div>
+                            <div
+                              className="mt-3 overflow-x-auto pb-2"
+                              data-testid="editor-layout-preview-scroll"
+                            >
+                              <div
+                                className="space-y-3"
+                                style={{ width: `${editorBlockWidth}px` }}
+                                data-testid="editor-layout-preview"
+                              >
+                                <div className="rounded-xl border border-[#7aa2f7]/25 bg-[#24283b] p-4 shadow-[0_0_20px_rgba(122,162,247,0.08)]">
+                                  <div className="flex gap-4">
+                                    <span className="mono mt-1.5 text-xs text-[#565f89] opacity-50">
+                                      01
+                                    </span>
+                                    <div
+                                      className="flex-1 font-mono text-[#c0caf5]"
+                                      style={conceptTypographyStyle}
+                                    >
+                                      Fourier transforms turn dense signals into readable frequency domains.
+                                    </div>
+                                  </div>
+                                  <div className="ml-10 mt-4 space-y-3 border-l border-[#565f89]/30 pl-4">
+                                    <div className="rounded-lg border border-[#ff9e64]/30 bg-[#ff9e64]/10 p-3">
+                                      <div className="flex items-start gap-3">
+                                        <span className="mt-0.5 rounded bg-[#ff9e64]/20 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider text-[#ff9e64]">
+                                          ?
+                                        </span>
+                                        <div
+                                          className="flex-1 font-mono text-[#a9b1d6]"
+                                          style={derivativeTypographyStyle}
+                                        >
+                                          What changes when the sample window narrows?
+                                        </div>
+                                      </div>
+                                    </div>
+                                    <div className="rounded-lg border border-[#7dcfff]/30 bg-[#7dcfff]/10 p-3">
+                                      <div className="flex items-start gap-3">
+                                        <span className="mt-0.5 rounded bg-[#7dcfff]/20 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider text-[#7dcfff]">
+                                          E
+                                        </span>
+                                        <div
+                                          className="flex-1 font-mono text-[#a9b1d6]"
+                                          style={derivativeTypographyStyle}
+                                        >
+                                          Narrow windows improve time localization, but they smear nearby frequencies together.
+                                        </div>
+                                      </div>
+                                    </div>
+                                  </div>
                                 </div>
-                              )}
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="rounded-xl border border-[#22283a] bg-[#101521]/80 p-3">
+                        <div className="flex items-start justify-between gap-3">
+                          <div>
+                            <div className="text-sm font-bold text-[#cbd3f2]">
+                              Workspace wallpaper
+                            </div>
+                            <div className="text-sm text-[#94a0c6]">
+                              Choose a JPG or PNG from `/public`. Labels come
+                              directly from each filename.
+                            </div>
+                          </div>
+                          <div className="text-sm text-[#7f8bb4]">
+                            {wallpaperLoadStatus === "loading" && "Loading…"}
+                            {wallpaperLoadStatus === "ready" &&
+                              `${wallpaperOptions.length} available`}
+                            {wallpaperLoadStatus === "error" && "Unavailable"}
+                          </div>
+                        </div>
+
+                        <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                          <button
+                            type="button"
+                            className={`rounded-xl border text-left transition ${selectedWallpaperFilename === null ? "border-[#7aa2f7]/70 bg-[#1a2338]" : "border-[#22283a] bg-[#121826] hover:border-[#465176]"}`}
+                            onClick={() => setSelectedWallpaperFilename(null)}
+                            aria-pressed={selectedWallpaperFilename === null}
+                          >
+                            <div className="flex h-28 items-center justify-center bg-[radial-gradient(circle_at_top,rgba(122,162,247,0.18),rgba(16,21,33,0.96)_70%)]">
+                              <div className="rounded-full border border-[#2a3350] px-3 py-1 text-sm font-bold tracking-[0.2em] text-[#9bb2ff]">
+                                DEFAULT
+                              </div>
                             </div>
                           </button>
-                        );
-                      })}
-                    </div>
 
-                    {wallpaperLoadStatus === "error" && (
-                      <div className="mt-3 text-sm text-[#ff9aaa]">
-                        Couldn&apos;t load wallpapers from `/public`.
-                      </div>
-                    )}
-                    {wallpaperLoadStatus === "ready" &&
-                      wallpaperOptions.length === 0 && (
-                        <div className="mt-3 text-sm text-[#94a0c6]">
-                          No JPG or PNG wallpapers were found in `/public`.
+                          {wallpaperOptions.map((option) => {
+                            const isSelected =
+                              option.filename === selectedWallpaperFilename;
+                            return (
+                              <button
+                                key={option.filename}
+                                type="button"
+                                className={`group overflow-hidden rounded-xl border text-left transition ${isSelected ? "border-[#7aa2f7]/70 bg-[#1a2338]" : "border-[#22283a] bg-[#121826] hover:border-[#465176]"}`}
+                                onClick={() =>
+                                  setSelectedWallpaperFilename(option.filename)
+                                }
+                                aria-pressed={isSelected}
+                                data-testid={`wallpaper-option-${option.filename}`}
+                              >
+                                <div className="relative h-28 overflow-hidden bg-[#0d111b]">
+                                  <div
+                                    className="absolute inset-[-10%] bg-cover bg-center transition duration-300 group-hover:scale-105"
+                                    style={{
+                                      backgroundImage: `url("${option.src}")`,
+                                    }}
+                                  />
+                                  <div className="absolute inset-0 bg-gradient-to-t from-[#0b0e17] via-[#0b0e17]/20 to-transparent" />
+                                  <div className="absolute bottom-2 left-3 right-3 text-sm font-bold text-[#f3f6ff] drop-shadow-[0_0_10px_rgba(0,0,0,0.85)]">
+                                    {option.name}
+                                  </div>
+                                  {isSelected && (
+                                    <div className="absolute right-2 top-2 rounded-full border border-[#7aa2f7]/60 bg-[#141b29]/85 px-2 py-0.5 text-xs font-bold text-[#9bb2ff]">
+                                      Selected
+                                    </div>
+                                  )}
+                                </div>
+                              </button>
+                            );
+                          })}
                         </div>
-                      )}
 
-                    <div className="mt-4 space-y-2">
-                      <div className="flex items-center justify-between text-sm">
-                        <span className="font-bold text-[#cbd3f2]">
-                          Background opacity
-                        </span>
-                        <span className="text-[#9bb2ff]">
-                          {backgroundOpacity}%
-                        </span>
-                      </div>
-                      <input
-                        type="range"
-                        min={0}
-                        max={100}
-                        step={5}
-                        value={backgroundOpacity}
-                        onChange={(e) =>
-                          setBackgroundOpacity(
-                            normalizeWallpaperOpacity(e.target.value),
-                          )
-                        }
-                        disabled={!selectedWallpaperFilename}
-                        className="w-full accent-[#7aa2f7] disabled:cursor-not-allowed disabled:opacity-40"
-                      />
-                      <div className="text-sm text-[#94a0c6]">
-                        {selectedWallpaperFilename
-                          ? "Lower values keep the wallpaper subtle behind the workspace."
-                          : "Select a wallpaper to preview and adjust its opacity."}
+                        {wallpaperLoadStatus === "error" && (
+                          <div className="mt-3 text-sm text-[#ff9aaa]">
+                            Couldn&apos;t load wallpapers from `/public`.
+                          </div>
+                        )}
+                        {wallpaperLoadStatus === "ready" &&
+                          wallpaperOptions.length === 0 && (
+                            <div className="mt-3 text-sm text-[#94a0c6]">
+                              No JPG or PNG wallpapers were found in `/public`.
+                            </div>
+                          )}
+
+                        <div className="mt-4 space-y-2">
+                          <div className="flex items-center justify-between text-sm">
+                            <span className="font-bold text-[#cbd3f2]">
+                              Background opacity
+                            </span>
+                            <span className="text-[#9bb2ff]">
+                              {backgroundOpacity}%
+                            </span>
+                          </div>
+                          <input
+                            type="range"
+                            min={0}
+                            max={100}
+                            step={5}
+                            value={backgroundOpacity}
+                            onChange={(e) =>
+                              setBackgroundOpacity(
+                                normalizeWallpaperOpacity(e.target.value),
+                              )
+                            }
+                            disabled={!selectedWallpaperFilename}
+                            className="w-full accent-[#7aa2f7] disabled:cursor-not-allowed disabled:opacity-40"
+                          />
+                          <div className="text-sm text-[#94a0c6]">
+                            {selectedWallpaperFilename
+                              ? "Lower values keep the wallpaper subtle behind the workspace."
+                              : "Select a wallpaper to preview and adjust its opacity."}
+                          </div>
+                        </div>
                       </div>
                     </div>
                   </div>
-                </div>
+                )}
               </div>
             </div>
           </div>
