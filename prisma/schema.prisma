@@ -21,6 +21,7 @@ model EngramNode {
   name      String
   topic     Json?
   isRoot    Boolean  @default(false) @map("is_root")
+  deletedAt DateTime? @map("deleted_at") @db.Timestamptz(6)
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
   parent    EngramNode? @relation("EngramNodeTree", fields: [parentId], references: [id], onDelete: Cascade)
@@ -29,6 +30,7 @@ model EngramNode {
   @@index([ownerId], map: "engram_nodes_owner_id_idx")
   @@index([ownerId, parentId], map: "engram_nodes_owner_id_parent_id_idx")
   @@index([ownerId, type], map: "engram_nodes_owner_id_type_idx")
+  @@index([ownerId, deletedAt], map: "engram_nodes_owner_id_deleted_at_idx")
   @@map("engram_nodes")
 }
 

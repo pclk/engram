@@ -99,7 +99,7 @@ describe('/api/content route', () => {
 			}
 		});
 		expect(prismaMock.engramNode.findMany).toHaveBeenCalledWith({
-			where: { ownerId: rootNode.ownerId },
+			where: { ownerId: rootNode.ownerId, deletedAt: null },
 			orderBy: [{ type: 'asc' }, { name: 'asc' }]
 		});
 	});
@@ -176,7 +176,8 @@ describe('/api/content route', () => {
 				updatedAt: new Date('2026-01-01T00:00:00.000Z')
 			}
 		] as any);
-		prismaMock.engramNode.deleteMany.mockResolvedValue({ count: 2 } as any);
+		prismaMock.engramNode.deleteMany.mockResolvedValue({ count: 0 } as any);
+		prismaMock.engramNode.updateMany.mockResolvedValue({ count: 2 } as any);
 
 		const { DELETE } = await import('@/app/api/content/route');
 		const response = await DELETE(new Request('http://localhost/api/content?id=dddddddd-dddd-4ddd-8ddd-dddddddddddd', { method: 'DELETE' }));
@@ -192,11 +193,13 @@ describe('/api/content route', () => {
 				]
 			}
 		});
-		expect(prismaMock.engramNode.deleteMany).toHaveBeenCalledWith({
+		expect(prismaMock.engramNode.updateMany).toHaveBeenCalledWith({
 			where: {
 				ownerId: ownerRoot.ownerId,
-				id: { in: ['dddddddd-dddd-4ddd-8ddd-dddddddddddd', 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee'] }
-			}
+				id: { in: ['dddddddd-dddd-4ddd-8ddd-dddddddddddd', 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee'] },
+				deletedAt: null
+			},
+			data: { deletedAt: expect.any(Date) }
 		});
 	});
 });
