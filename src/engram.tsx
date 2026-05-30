@@ -75,6 +75,11 @@ type LegendEntry = {
   description: string;
 };
 type SettingsTab = "account" | "display";
+type SizeUnit = "px" | "%";
+type SizeSetting = {
+  value: number;
+  unit: SizeUnit;
+};
 type InsertSelection = {
   cursorIdx: number;
   derivIdx: number;
@@ -117,17 +122,30 @@ const WALLPAPER_FILENAME_KEY = "engram.wallpaper.filename.v1";
 const WALLPAPER_OPACITY_KEY = "engram.wallpaper.opacity.v1";
 const SHOW_KEY_BUFFER_KEY = "engram.showKeyBuffer";
 const EDITOR_FONT_SCALE_KEY = "engram.editor.fontScale.v1";
+const CONCEPT_FONT_SIZE_KEY = "engram.editor.conceptFontSize.v1";
+const DERIVATIVE_FONT_SIZE_KEY = "engram.editor.derivativeFontSize.v1";
 const EDITOR_BLOCK_WIDTH_KEY = "engram.editor.blockWidth.v1";
 const DEFAULT_EDITOR_FONT_SCALE = 1;
-const MIN_EDITOR_FONT_SCALE = 0.5;
-const MAX_EDITOR_FONT_SCALE = 3;
-const EDITOR_FONT_SCALE_STEP = 0.05;
-const DEFAULT_EDITOR_BLOCK_WIDTH = 768;
+const DEFAULT_CONCEPT_FONT_SIZE: SizeSetting = { value: 100, unit: "%" };
+const DEFAULT_DERIVATIVE_FONT_SIZE: SizeSetting = { value: 100, unit: "%" };
+const DEFAULT_EDITOR_BLOCK_WIDTH: SizeSetting = { value: 768, unit: "px" };
+const MIN_FONT_SIZE_PERCENT = 50;
+const MAX_FONT_SIZE_PERCENT = 300;
+const FONT_SIZE_PERCENT_STEP = 5;
+const MIN_FONT_SIZE_PX = 8;
+const MAX_FONT_SIZE_PX = 64;
+const FONT_SIZE_PX_STEP = 0.5;
 const MIN_EDITOR_BLOCK_WIDTH = 576;
 const MAX_EDITOR_BLOCK_WIDTH = 3840;
 const EDITOR_BLOCK_WIDTH_STEP = 1;
+const MIN_EDITOR_BLOCK_WIDTH_PERCENT = 40;
+const MAX_EDITOR_BLOCK_WIDTH_PERCENT = 100;
+const EDITOR_BLOCK_WIDTH_PERCENT_STEP = 1;
 const CONCEPT_FONT_BASE_REM = 1.125;
 const DERIVATIVE_FONT_BASE_REM = 0.875;
+const ROOT_FONT_SIZE_PX = 16;
+const CONCEPT_FONT_BASE_PX = CONCEPT_FONT_BASE_REM * ROOT_FONT_SIZE_PX;
+const DERIVATIVE_FONT_BASE_PX = DERIVATIVE_FONT_BASE_REM * ROOT_FONT_SIZE_PX;
 const EMPTY_MODIFIERS: PressedModifiers = {
   alt: false,
   ctrl: false,
@@ -145,9 +163,73 @@ const formatKeyboardKey = (key: string) => {
   return key;
 };
 
-const normalizeEditorFontScale = (
+const clampNumber = (value: number, min: number, max: number) =>
+  Math.min(max, Math.max(min, value));
+
+const snapNumber = (value: number, step: number) =>
+  Number((Math.round(value / step) * step).toFixed(2));
+
+const formatSizeValue = (value: number) =>
+  Number.isInteger(value)
+    ? String(value)
+    : value.toFixed(2).replace(/0+$/, "").replace(/\.$/, "");
+
+const formatSizeSetting = (setting: SizeSetting) =>
+  `${formatSizeValue(setting.value)}${setting.unit}`;
+
+const parseSizeSetting = (
   value: string | number | null | undefined,
+  defaultUnit: SizeUnit,
 ) => {
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? { value, unit: defaultUnit } : null;
+  }
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim().toLowerCase();
+  if (!trimmed) return null;
+  const unit = trimmed.endsWith("%")
+    ? "%"
+    : trimmed.endsWith("px")
+      ? "px"
+      : defaultUnit;
+  const parsed = Number.parseFloat(trimmed);
+  if (!Number.isFinite(parsed)) return null;
+  return { value: parsed, unit };
+};
+
+const normalizeFontSizeSetting = (
+  value: string | number | SizeSetting | null | undefined,
+  fallback: SizeSetting,
+  defaultUnit = fallback.unit,
+): SizeSetting => {
+  const parsed =
+    value && typeof value === "object"
+      ? value
+      : parseSizeSetting(value, defaultUnit);
+  if (!parsed) return fallback;
+  if (parsed.unit === "%") {
+    return {
+      value: snapNumber(
+        clampNumber(
+          parsed.value,
+          MIN_FONT_SIZE_PERCENT,
+          MAX_FONT_SIZE_PERCENT,
+        ),
+        FONT_SIZE_PERCENT_STEP,
+      ),
+      unit: "%",
+    };
+  }
+  return {
+    value: snapNumber(
+      clampNumber(parsed.value, MIN_FONT_SIZE_PX, MAX_FONT_SIZE_PX),
+      FONT_SIZE_PX_STEP,
+    ),
+    unit: "px",
+  };
+};
+
+const normalizeEditorFontScale = (value: string | number | null | undefined) => {
   const parsed =
     typeof value === "number"
       ? value
@@ -155,30 +237,108 @@ const normalizeEditorFontScale = (
         ? Number.parseFloat(value)
         : Number.NaN;
   if (!Number.isFinite(parsed)) return DEFAULT_EDITOR_FONT_SCALE;
-  const snapped =
-    Math.round(parsed / EDITOR_FONT_SCALE_STEP) * EDITOR_FONT_SCALE_STEP;
-  return Number(
-    Math.min(
-      MAX_EDITOR_FONT_SCALE,
-      Math.max(MIN_EDITOR_FONT_SCALE, snapped),
-    ).toFixed(2),
+  return snapNumber(
+    clampNumber(
+      parsed,
+      MIN_FONT_SIZE_PERCENT / 100,
+      MAX_FONT_SIZE_PERCENT / 100,
+    ),
+    FONT_SIZE_PERCENT_STEP / 100,
   );
 };
 
 const normalizeEditorBlockWidth = (
-  value: string | number | null | undefined,
-) => {
+  value: string | number | SizeSetting | null | undefined,
+): SizeSetting => {
   const parsed =
-    typeof value === "number"
+    value && typeof value === "object"
       ? value
-      : typeof value === "string"
-        ? Number.parseFloat(value)
-        : Number.NaN;
-  if (!Number.isFinite(parsed)) return DEFAULT_EDITOR_BLOCK_WIDTH;
-  const rounded = Math.round(parsed);
-  return Math.min(
-    MAX_EDITOR_BLOCK_WIDTH,
-    Math.max(MIN_EDITOR_BLOCK_WIDTH, rounded),
+      : parseSizeSetting(value, DEFAULT_EDITOR_BLOCK_WIDTH.unit);
+  if (!parsed) return DEFAULT_EDITOR_BLOCK_WIDTH;
+  if (parsed.unit === "%") {
+    return {
+      value: snapNumber(
+        clampNumber(
+          parsed.value,
+          MIN_EDITOR_BLOCK_WIDTH_PERCENT,
+          MAX_EDITOR_BLOCK_WIDTH_PERCENT,
+        ),
+        EDITOR_BLOCK_WIDTH_PERCENT_STEP,
+      ),
+      unit: "%",
+    };
+  }
+  return {
+    value: snapNumber(
+      clampNumber(parsed.value, MIN_EDITOR_BLOCK_WIDTH, MAX_EDITOR_BLOCK_WIDTH),
+      EDITOR_BLOCK_WIDTH_STEP,
+    ),
+    unit: "px",
+  };
+};
+
+const resolveFontSizePx = (setting: SizeSetting, basePx: number) => {
+  if (setting.unit === "%") return basePx * (setting.value / 100);
+  return setting.value;
+};
+
+const convertFontSizeSettingUnit = (
+  setting: SizeSetting,
+  basePx: number,
+  unit: SizeUnit,
+) => {
+  if (setting.unit === unit) return setting;
+  const pixelValue = resolveFontSizePx(setting, basePx);
+  return normalizeFontSizeSetting(
+    {
+      value: unit === "%" ? (pixelValue / basePx) * 100 : pixelValue,
+      unit,
+    },
+    setting,
+    unit,
+  );
+};
+
+const convertEditorBlockWidthUnit = (
+  setting: SizeSetting,
+  unit: SizeUnit,
+) => {
+  if (setting.unit === unit) return setting;
+
+  const sourceMin =
+    setting.unit === "%" ? MIN_EDITOR_BLOCK_WIDTH_PERCENT : MIN_EDITOR_BLOCK_WIDTH;
+  const sourceMax =
+    setting.unit === "%" ? MAX_EDITOR_BLOCK_WIDTH_PERCENT : MAX_EDITOR_BLOCK_WIDTH;
+  const targetMin =
+    unit === "%" ? MIN_EDITOR_BLOCK_WIDTH_PERCENT : MIN_EDITOR_BLOCK_WIDTH;
+  const targetMax =
+    unit === "%" ? MAX_EDITOR_BLOCK_WIDTH_PERCENT : MAX_EDITOR_BLOCK_WIDTH;
+  const rangeProgress = clampNumber(
+    (setting.value - sourceMin) / (sourceMax - sourceMin),
+    0,
+    1,
+  );
+
+  return normalizeEditorBlockWidth({
+    value: targetMin + rangeProgress * (targetMax - targetMin),
+    unit,
+  });
+};
+
+const adjustFontSizeSetting = (
+  setting: SizeSetting,
+  basePx: number,
+  direction: 1 | -1,
+) => {
+  if (setting.unit === "%") {
+    return normalizeFontSizeSetting(
+      { ...setting, value: setting.value + direction * FONT_SIZE_PERCENT_STEP },
+      setting,
+    );
+  }
+  return normalizeFontSizeSetting(
+    { ...setting, value: setting.value + direction * basePx * 0.05 },
+    setting,
   );
 };
 
@@ -460,6 +620,20 @@ const getTopicPreview = (topic: FileNode["topic"]) => {
     .map((text) => text.trim())
     .find(Boolean);
   return preview || "Empty note";
+};
+
+const getTopicFullPath = (topic: Pick<Topic, "path" | "title">) =>
+  topic.path === "/" ? `/${topic.title}` : `${topic.path}/${topic.title}`;
+
+const topicConceptMatchesFilter = (concept: Concept, query: string) => {
+  const normalizedQuery = query.trim().toLowerCase();
+  if (!normalizedQuery) return true;
+  return (
+    concept.text.toLowerCase().includes(normalizedQuery) ||
+    concept.derivatives.some((derivative) =>
+      derivative.text.toLowerCase().includes(normalizedQuery),
+    )
+  );
 };
 
 type TrashEntry = z.infer<typeof trashEntrySchema>;
@@ -1142,10 +1316,10 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
   const insertDirtyRef = useRef(false);
   const insertSkipCommitRef = useRef(false);
   const insertBaseStateRef = useRef<HistoryState | null>(null);
-  const [searchQuery, setSearchQuery] = useState("");
-  const [lastSearchQuery, setLastSearchQuery] = useState("");
-  const [isSearching, setIsSearching] = useState(false);
+  const [topicFilterQuery, setTopicFilterQuery] = useState("");
+  const [isTopicFilterEditing, setIsTopicFilterEditing] = useState(false);
   const [isAccountOpen, setIsAccountOpen] = useState(false);
+  const [isSizeEditorOpen, setIsSizeEditorOpen] = useState(false);
   const [settingsTab, setSettingsTab] = useState<SettingsTab>(
     guestMode ? "display" : "account",
   );
@@ -1175,17 +1349,23 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
   const [backgroundOpacity, setBackgroundOpacity] = useState(
     DEFAULT_WALLPAPER_OPACITY,
   );
-  const [editorFontScale, setEditorFontScale] = useState(
-    DEFAULT_EDITOR_FONT_SCALE,
+  const [conceptFontSize, setConceptFontSize] = useState(
+    DEFAULT_CONCEPT_FONT_SIZE,
+  );
+  const [derivativeFontSize, setDerivativeFontSize] = useState(
+    DEFAULT_DERIVATIVE_FONT_SIZE,
   );
   const [editorBlockWidth, setEditorBlockWidth] = useState(
     DEFAULT_EDITOR_BLOCK_WIDTH,
   );
-  const [editorFontPercentDraft, setEditorFontPercentDraft] = useState(
-    String(Math.round(DEFAULT_EDITOR_FONT_SCALE * 100)),
+  const [conceptFontSizeDraft, setConceptFontSizeDraft] = useState(
+    formatSizeSetting(DEFAULT_CONCEPT_FONT_SIZE),
+  );
+  const [derivativeFontSizeDraft, setDerivativeFontSizeDraft] = useState(
+    formatSizeSetting(DEFAULT_DERIVATIVE_FONT_SIZE),
   );
   const [editorBlockWidthDraft, setEditorBlockWidthDraft] = useState(
-    String(DEFAULT_EDITOR_BLOCK_WIDTH),
+    formatSizeSetting(DEFAULT_EDITOR_BLOCK_WIDTH),
   );
   const [insertSelection, setInsertSelection] =
     useState<InsertSelection | null>(null);
@@ -1320,22 +1500,34 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
   const activeInteractionLabel =
     liveKeyIndicator?.label ??
     (activeModifierLabels.length > 0 ? activeModifierLabels.join("+") : null);
+  const conceptFontPx = resolveFontSizePx(
+    conceptFontSize,
+    CONCEPT_FONT_BASE_PX,
+  );
+  const derivativeFontPx = resolveFontSizePx(
+    derivativeFontSize,
+    DERIVATIVE_FONT_BASE_PX,
+  );
+  const editorBlockWidthCss = formatSizeSetting(editorBlockWidth);
   const conceptTypographyStyle: React.CSSProperties = {
-    fontSize: `${(CONCEPT_FONT_BASE_REM * editorFontScale).toFixed(3)}rem`,
+    fontSize: `${conceptFontPx.toFixed(2)}px`,
     lineHeight: 1.75,
   };
   const derivativeTypographyStyle: React.CSSProperties = {
-    fontSize: `${(DERIVATIVE_FONT_BASE_REM * editorFontScale).toFixed(3)}rem`,
+    fontSize: `${derivativeFontPx.toFixed(2)}px`,
     lineHeight: 1.6,
   };
-  const editorFontPercent = Math.round(editorFontScale * 100);
 
   useEffect(() => {
-    setEditorFontPercentDraft(String(editorFontPercent));
-  }, [editorFontPercent]);
+    setConceptFontSizeDraft(formatSizeSetting(conceptFontSize));
+  }, [conceptFontSize]);
 
   useEffect(() => {
-    setEditorBlockWidthDraft(String(editorBlockWidth));
+    setDerivativeFontSizeDraft(formatSizeSetting(derivativeFontSize));
+  }, [derivativeFontSize]);
+
+  useEffect(() => {
+    setEditorBlockWidthDraft(formatSizeSetting(editorBlockWidth));
   }, [editorBlockWidth]);
 
   useEffect(() => {
@@ -2453,6 +2645,57 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
     return { text: deleteRange(text, start, end), cursor: start };
   };
 
+  const getCurrentLineRange = (text: string, cursor: number) => {
+    const lineStart = findLineStart(text, cursor);
+    const lineEnd = findLineEnd(text, cursor);
+    const lineEndWithBreak = lineEnd < text.length ? lineEnd + 1 : lineEnd;
+    return { lineStart, lineEnd, lineEndWithBreak };
+  };
+
+  const yankCurrentLine = (text: string, cursor: number) => {
+    const { lineStart, lineEnd } = getCurrentLineRange(text, cursor);
+    const yankedText = text.slice(lineStart, lineEnd);
+    setYankText(yankedText);
+    setYankBuffer(null);
+    setVisualAnchor(null);
+    if (lineEnd > lineStart) triggerYankFlash(lineStart, lineEnd - 1);
+    void copyMarkdownToClipboard(yankedText);
+    setKeyBuffer("");
+  };
+
+  const deleteCurrentNormalLine = (text: string, cursor: number) => {
+    const { text: newText, cursor: nextCursor } = deleteCurrentLine(
+      text,
+      cursor,
+    );
+    updateTopic(buildTopicWithText(newText));
+    setCursor(Math.min(nextCursor, newText.length));
+    setVisualAnchor(null);
+    setKeyBuffer("");
+  };
+
+  const changeCurrentNormalLine = (text: string, cursor: number) => {
+    const { text: newText, cursor: nextCursor } = deleteCurrentLine(
+      text,
+      cursor,
+    );
+    applyChangeAndEnterInsert(newText, Math.min(nextCursor, newText.length));
+    setVisualAnchor(null);
+    setKeyBuffer("");
+  };
+
+  const selectCurrentNormalLine = (text: string, cursor: number) => {
+    const { lineStart, lineEndWithBreak } = getCurrentLineRange(text, cursor);
+    setVisualAnchor({
+      kind: "text",
+      cursorIdx,
+      derivIdx,
+      charIndex: lineStart,
+    });
+    setCursor(Math.max(lineStart, lineEndWithBreak - 1));
+    setKeyBuffer("");
+  };
+
   const applyTextChange = (text: string) => {
     const newTopic = buildTopicWithText(text);
     pushState({ topic: newTopic, cursorIdx, derivIdx });
@@ -2781,41 +3024,54 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
     }
   }, [formatPersistError, requestWithAuth, useLocalPersistence]);
 
-  const updateEditorFontScale = (
-    value: string | number,
-    options?: { toast?: boolean },
-  ) => {
-    const next = normalizeEditorFontScale(value);
-    if (next === editorFontScale) {
-      if (options?.toast) showToast(`Font size ${editorFontPercent}%`);
+  const updateConceptFontSize = (value: string | number | SizeSetting) => {
+    setConceptFontSize((prev) =>
+      normalizeFontSizeSetting(value, DEFAULT_CONCEPT_FONT_SIZE, prev.unit),
+    );
+  };
+
+  const updateDerivativeFontSize = (value: string | number | SizeSetting) => {
+    setDerivativeFontSize((prev) =>
+      normalizeFontSizeSetting(value, DEFAULT_DERIVATIVE_FONT_SIZE, prev.unit),
+    );
+  };
+
+  const commitConceptFontSizeDraft = () => {
+    if (conceptFontSizeDraft.trim() === "") {
+      setConceptFontSizeDraft(formatSizeSetting(conceptFontSize));
       return;
     }
-    setEditorFontScale(next);
-    if (options?.toast) showToast(`Font size ${Math.round(next * 100)}%`);
+    updateConceptFontSize(conceptFontSizeDraft);
   };
 
-  const commitEditorFontScaleDraft = () => {
-    if (editorFontPercentDraft.trim() === "") {
-      setEditorFontPercentDraft(String(editorFontPercent));
+  const commitDerivativeFontSizeDraft = () => {
+    if (derivativeFontSizeDraft.trim() === "") {
+      setDerivativeFontSizeDraft(formatSizeSetting(derivativeFontSize));
       return;
     }
-    updateEditorFontScale(Number(editorFontPercentDraft) / 100);
+    updateDerivativeFontSize(derivativeFontSizeDraft);
   };
 
-  const adjustEditorFontScale = (
-    delta: number,
+  const adjustEditorFontSizes = (
+    direction: 1 | -1,
     options?: { toast?: boolean },
   ) => {
-    updateEditorFontScale(editorFontScale + delta, options);
+    setConceptFontSize((prev) =>
+      adjustFontSizeSetting(prev, CONCEPT_FONT_BASE_PX, direction),
+    );
+    setDerivativeFontSize((prev) =>
+      adjustFontSizeSetting(prev, DERIVATIVE_FONT_BASE_PX, direction),
+    );
+    if (options?.toast) showToast("Font size adjusted");
   };
 
-  const updateEditorBlockWidth = (value: string | number) => {
+  const updateEditorBlockWidth = (value: string | number | SizeSetting) => {
     setEditorBlockWidth(normalizeEditorBlockWidth(value));
   };
 
   const commitEditorBlockWidthDraft = () => {
     if (editorBlockWidthDraft.trim() === "") {
-      setEditorBlockWidthDraft(String(editorBlockWidth));
+      setEditorBlockWidthDraft(formatSizeSetting(editorBlockWidth));
       return;
     }
     updateEditorBlockWidth(editorBlockWidthDraft);
@@ -3116,68 +3372,6 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
     setKeyBuffer("");
   };
 
-  const navigateSearch = (query: string, reverse: boolean) => {
-    if (!query) return;
-    const q = query.toLowerCase();
-
-    const items: { cIdx: number; dIdx: number; text: string }[] = [];
-    topic.concepts.forEach((c, ci) => {
-      items.push({ cIdx: ci, dIdx: -1, text: c.text });
-      c.derivatives.forEach((d, di) => {
-        items.push({ cIdx: ci, dIdx: di, text: d.text });
-      });
-    });
-
-    let currentPos = items.findIndex(
-      (item) => item.cIdx === cursorIdx && item.dIdx === derivIdx,
-    );
-    if (currentPos === -1) currentPos = 0;
-
-    let foundIdx = -1;
-    if (reverse) {
-      for (let i = currentPos - 1; i >= 0; i--) {
-        if (items[i].text.toLowerCase().includes(q)) {
-          foundIdx = i;
-          break;
-        }
-      }
-      if (foundIdx === -1) {
-        for (let i = items.length - 1; i > currentPos; i--) {
-          if (items[i].text.toLowerCase().includes(q)) {
-            foundIdx = i;
-            break;
-          }
-        }
-      }
-    } else {
-      for (let i = currentPos + 1; i < items.length; i++) {
-        if (items[i].text.toLowerCase().includes(q)) {
-          foundIdx = i;
-          break;
-        }
-      }
-      if (foundIdx === -1) {
-        for (let i = 0; i <= currentPos; i++) {
-          if (items[i].text.toLowerCase().includes(q)) {
-            foundIdx = i;
-            break;
-          }
-        }
-      }
-    }
-
-    if (foundIdx !== -1) {
-      const target = items[foundIdx];
-      setHState((prev) => ({
-        ...prev,
-        cursorIdx: target.cIdx,
-        derivIdx: target.dIdx,
-      }));
-      const matchIdx = target.text.toLowerCase().indexOf(q);
-      if (matchIdx !== -1) setNormalCursor(matchIdx);
-    }
-  };
-
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       const hasPendingNormalChord =
@@ -3206,18 +3400,22 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
         (e.key === "-" || e.key === "_" || e.key === "Subtract");
       if (isEditorFontIncreaseShortcut || isEditorFontDecreaseShortcut) {
         e.preventDefault();
-        adjustEditorFontScale(
-          isEditorFontIncreaseShortcut
-            ? EDITOR_FONT_SCALE_STEP
-            : -EDITOR_FONT_SCALE_STEP,
-          { toast: true },
-        );
+        adjustEditorFontSizes(isEditorFontIncreaseShortcut ? 1 : -1, {
+          toast: true,
+        });
         return;
       }
       if (isAccountOpen) {
         if (e.key === "Escape") {
           e.preventDefault();
           setIsAccountOpen(false);
+        }
+        return;
+      }
+      if (isSizeEditorOpen) {
+        if (e.key === "Escape") {
+          e.preventDefault();
+          setIsSizeEditorOpen(false);
         }
         return;
       }
@@ -3431,17 +3629,44 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
         return;
       }
 
-      if (isSearching) {
-        if (e.key === "Escape") {
-          setIsSearching(false);
-          setSearchQuery("");
-        }
+      if (e.key === "/" && (isTopicFilterEditing || topicFilterQuery)) {
+        e.preventDefault();
+        setIsTopicFilterEditing(false);
+        setTopicFilterQuery("");
+        return;
+      }
+
+      if (isTopicFilterEditing) {
+        e.preventDefault();
         if (e.key === "Enter") {
-          const query = searchQuery;
-          setLastSearchQuery(query);
-          navigateSearch(query, false);
-          setIsSearching(false);
+          setIsTopicFilterEditing(false);
+          return;
         }
+        if (e.key === "Backspace") {
+          setTopicFilterQuery((prev) => prev.slice(0, -1));
+          return;
+        }
+        if (e.key.length === 1 && !e.altKey && !e.ctrlKey && !e.metaKey) {
+          setTopicFilterQuery((prev) => `${prev}${e.key}`);
+        }
+        return;
+      }
+
+      if (
+        e.key === "/" &&
+        (mode === "BLOCK" || mode === "NORMAL" || mode === "INSERT")
+      ) {
+        e.preventDefault();
+        setKeyBuffer("");
+        normalYankPendingRef.current = false;
+        setNormalYankPending(false);
+        normalDeletePendingRef.current = false;
+        setNormalDeletePending(false);
+        normalChangePendingRef.current = false;
+        setNormalChangePending(false);
+        blockChordRef.current = { key: null, at: 0 };
+        setIsTopicFilterEditing(true);
+        setTopicFilterQuery("");
         return;
       }
 
@@ -3525,6 +3750,22 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
           setMode("BLOCK");
           return;
         }
+        if (e.key === "Y") {
+          yankCurrentLine(text, normalCursorRef.current);
+          return;
+        }
+        if (e.key === "D") {
+          deleteCurrentNormalLine(text, normalCursorRef.current);
+          return;
+        }
+        if (e.key === "C") {
+          changeCurrentNormalLine(text, normalCursorRef.current);
+          return;
+        }
+        if (e.key === "V") {
+          selectCurrentNormalLine(text, normalCursorRef.current);
+          return;
+        }
         if (visualAnchor && e.key === "d") {
           if (deleteVisualTextSelection(false)) return;
         }
@@ -3553,10 +3794,10 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
             setYankBuffer(null);
             if (cursorPos > start) triggerYankFlash(start, cursorPos - 1);
           } else if (e.key === "y") {
-            yankedText = text;
-            setYankText(yankedText);
-            setYankBuffer(null);
-            if (text.length > 0) triggerYankFlash(0, text.length - 1);
+            yankCurrentLine(text, cursorPos);
+            normalYankPendingRef.current = false;
+            setNormalYankPending(false);
+            return;
           }
           if (yankedText !== null) void copyMarkdownToClipboard(yankedText);
           normalYankPendingRef.current = false;
@@ -3597,15 +3838,9 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
             return;
           }
           if (e.key === "d") {
-            const { text: newText, cursor: nextCursor } = deleteCurrentLine(
-              text,
-              cursorPos,
-            );
-            updateTopic(buildTopicWithText(newText));
-            setCursor(Math.min(nextCursor, newText.length));
+            deleteCurrentNormalLine(text, cursorPos);
             normalDeletePendingRef.current = false;
             setNormalDeletePending(false);
-            setKeyBuffer("");
             return;
           }
           normalDeletePendingRef.current = false;
@@ -3649,17 +3884,9 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
             return;
           }
           if (e.key === "c") {
-            const { text: newText, cursor: nextCursor } = deleteCurrentLine(
-              text,
-              cursorPos,
-            );
-            applyChangeAndEnterInsert(
-              newText,
-              Math.min(nextCursor, newText.length),
-            );
+            changeCurrentNormalLine(text, cursorPos);
             normalChangePendingRef.current = false;
             setNormalChangePending(false);
-            setKeyBuffer("");
             return;
           }
           normalChangePendingRef.current = false;
@@ -3702,6 +3929,11 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
             handleCopyMarkdown();
             return;
           }
+          if (e.key === "s") {
+            setKeyBuffer("");
+            openSettingsModal();
+            return;
+          }
           setKeyBuffer("");
           return;
         }
@@ -3741,20 +3973,6 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
           normalChangePendingRef.current = true;
           setNormalChangePending(true);
           setKeyBuffer("c");
-          return;
-        }
-
-        if (e.key === "/") {
-          setIsSearching(true);
-          setSearchQuery("");
-          return;
-        }
-        if (e.key === "n") {
-          navigateSearch(lastSearchQuery, false);
-          return;
-        }
-        if (e.key === "N") {
-          navigateSearch(lastSearchQuery, true);
           return;
         }
 
@@ -3904,6 +4122,11 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
             handleCopyMarkdown();
             return;
           }
+          if (e.key === "s") {
+            setKeyBuffer("");
+            openSettingsModal();
+            return;
+          }
           setKeyBuffer("");
           return;
         }
@@ -3915,20 +4138,6 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
           pasteYanked();
           return;
         }
-        if (e.key === "/") {
-          setIsSearching(true);
-          setSearchQuery("");
-          return;
-        }
-        if (e.key === "n") {
-          navigateSearch(lastSearchQuery, false);
-          return;
-        }
-        if (e.key === "N") {
-          navigateSearch(lastSearchQuery, true);
-          return;
-        }
-
         if (e.altKey && (e.key === "i" || e.key === "a" || e.key === "A")) {
           if (derivIdx !== -1 && !currentDeriv) return;
           const text =
@@ -4356,11 +4565,26 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
     normalCursor,
     cursorIdx,
     derivIdx,
-    isSearching,
-    searchQuery,
-    lastSearchQuery,
+    topicFilterQuery,
     visualAnchor,
   ]);
+
+  useEffect(() => {
+    if (!topicFilterQuery.trim()) return;
+    const current = topic.concepts[cursorIdx];
+    if (current && topicConceptMatchesFilter(current, topicFilterQuery)) return;
+    const nextCursorIdx = topic.concepts.findIndex((concept) =>
+      topicConceptMatchesFilter(concept, topicFilterQuery),
+    );
+    if (nextCursorIdx === -1) return;
+    setHState((prev) => ({
+      ...prev,
+      cursorIdx: nextCursorIdx,
+      derivIdx: -1,
+    }));
+    normalCursorRef.current = 0;
+    setNormalCursor(0);
+  }, [cursorIdx, setHState, topic.concepts, topicFilterQuery]);
 
   useEffect(() => {
     let isActive = true;
@@ -4422,8 +4646,24 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
       setBackgroundOpacity(
         normalizeWallpaperOpacity(localStorage.getItem(WALLPAPER_OPACITY_KEY)),
       );
-      setEditorFontScale(
-        normalizeEditorFontScale(localStorage.getItem(EDITOR_FONT_SCALE_KEY)),
+      const legacyFontScale = normalizeEditorFontScale(
+        localStorage.getItem(EDITOR_FONT_SCALE_KEY),
+      );
+      const legacyFontSetting: SizeSetting = {
+        value: Math.round(legacyFontScale * 100),
+        unit: "%",
+      };
+      setConceptFontSize(
+        normalizeFontSizeSetting(
+          localStorage.getItem(CONCEPT_FONT_SIZE_KEY),
+          legacyFontSetting,
+        ),
+      );
+      setDerivativeFontSize(
+        normalizeFontSizeSetting(
+          localStorage.getItem(DERIVATIVE_FONT_SIZE_KEY),
+          legacyFontSetting,
+        ),
       );
       setEditorBlockWidth(
         normalizeEditorBlockWidth(localStorage.getItem(EDITOR_BLOCK_WIDTH_KEY)),
@@ -4757,16 +4997,34 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
   useEffect(() => {
     if (!hasLoadedClientPrefs) return;
     try {
-      localStorage.setItem(EDITOR_FONT_SCALE_KEY, String(editorFontScale));
+      localStorage.setItem(
+        CONCEPT_FONT_SIZE_KEY,
+        formatSizeSetting(conceptFontSize),
+      );
     } catch {
       // ignore storage errors
     }
-  }, [editorFontScale, hasLoadedClientPrefs]);
+  }, [conceptFontSize, hasLoadedClientPrefs]);
 
   useEffect(() => {
     if (!hasLoadedClientPrefs) return;
     try {
-      localStorage.setItem(EDITOR_BLOCK_WIDTH_KEY, String(editorBlockWidth));
+      localStorage.setItem(
+        DERIVATIVE_FONT_SIZE_KEY,
+        formatSizeSetting(derivativeFontSize),
+      );
+    } catch {
+      // ignore storage errors
+    }
+  }, [derivativeFontSize, hasLoadedClientPrefs]);
+
+  useEffect(() => {
+    if (!hasLoadedClientPrefs) return;
+    try {
+      localStorage.setItem(
+        EDITOR_BLOCK_WIDTH_KEY,
+        formatSizeSetting(editorBlockWidth),
+      );
     } catch {
       // ignore storage errors
     }
@@ -4835,11 +5093,12 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
   }, [backgroundOpacity, hasLoadedClientPrefs]);
 
   useEffect(() => {
-    document.body.style.overflow = isAccountOpen ? "hidden" : "";
+    document.body.style.overflow =
+      isAccountOpen || isSizeEditorOpen ? "hidden" : "";
     return () => {
       document.body.style.overflow = "";
     };
-  }, [isAccountOpen, guestMode]);
+  }, [isAccountOpen, isSizeEditorOpen, guestMode]);
 
   useEffect(() => {
     if (!visualAnchor) return;
@@ -4901,7 +5160,7 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
     const cursorAccentClass = hasInteractionAccent
       ? activeInteractionDecor.cursor
       : "";
-    const sQuery = isSearching ? searchQuery : lastSearchQuery;
+    const sQuery = topicFilterQuery;
     const hasSearch = !!sQuery;
     const isVisualText =
       !!visualAnchor &&
@@ -5285,6 +5544,17 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
   };
 
   const renderOptions = () => {
+    if (isTopicFilterEditing) {
+      return (
+        <div className="flex flex-col gap-2">
+          <LegendItem keys="type" description="Build the topic filter" />
+          <LegendItem keys="Backspace" description="Remove last character" />
+          <LegendItem keys="Enter" description="Return to current mode" />
+          <LegendItem keys="/" description="Clear the topic filter" />
+        </div>
+      );
+    }
+
     if (visualAnchor) {
       return (
         <div className="flex flex-col gap-2">
@@ -5302,6 +5572,7 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
         <div className="flex flex-col gap-2">
           <LegendItem keys="Space + a" description="Open Folders" />
           <LegendItem keys="Space + c" description="Copy topic as Markdown" />
+          <LegendItem keys="Space + s" description="Open Settings" />
           <LegendItem keys="Esc" description="Cancel leader chord" />
         </div>
       );
@@ -5350,7 +5621,7 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
             <LegendItem keys="y w" description="Yank to next word" />
             <LegendItem keys="y e" description="Yank to end of word" />
             <LegendItem keys="y b" description="Yank to previous word" />
-            <LegendItem keys="y y" description="Yank the current line" />
+            <LegendItem keys="y y / Y" description="Yank the current line" />
             <LegendItem keys="Esc" description="Cancel yank chord" />
           </div>
         );
@@ -5361,7 +5632,7 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
             <LegendItem keys="d w" description="Delete to next word" />
             <LegendItem keys="d e" description="Delete to end of word" />
             <LegendItem keys="d b" description="Delete to previous word" />
-            <LegendItem keys="d d" description="Delete the current line" />
+            <LegendItem keys="d d / D" description="Delete the current line" />
             <LegendItem keys="Esc" description="Cancel delete chord" />
           </div>
         );
@@ -5372,7 +5643,7 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
             <LegendItem keys="c w" description="Change to next word" />
             <LegendItem keys="c e" description="Change to end of word" />
             <LegendItem keys="c b" description="Change to previous word" />
-            <LegendItem keys="c c" description="Change the current line" />
+            <LegendItem keys="c c / C" description="Change the current line" />
             <LegendItem keys="Esc" description="Cancel change chord" />
           </div>
         );
@@ -5395,20 +5666,19 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
             keys="w / b / e"
             description="Jump to next / previous / end of word"
           />
-          <LegendItem keys="v" description="Toggle Visual selection" />
+          <LegendItem keys="v / V" description="Toggle char / line selection" />
           <LegendItem
-            keys="y"
-            description="Yank (copy) the current block/selection"
+            keys="y / Y"
+            description="Yank motion / current line"
           />
           <LegendItem keys="p" description="Paste the yanked content below" />
-          <LegendItem keys="d" description="Delete: dw / de / db / dd" />
-          <LegendItem keys="c" description="Change: cw / ce / cb / cc" />
+          <LegendItem keys="d / D" description="Delete motion / current line" />
+          <LegendItem keys="c / C" description="Change motion / current line" />
           <LegendItem keys="Space" description="More actions..." />
           <LegendItem
             keys="/"
-            description="Search within concepts and derivatives"
+            description="Filter concepts and derivatives"
           />
-          <LegendItem keys="n / N" description="Next / previous search match" />
           <LegendItem keys="u" description="Undo last change" />
           <LegendItem keys="r" description="Redo last undo" />
           <LegendItem
@@ -5481,7 +5751,7 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
           <LegendItem keys="d" description="Begin delete chord" />
           <LegendItem keys="c" description="Begin change chord" />
           <LegendItem keys="Space" description="More actions..." />
-          <LegendItem keys="/" description="Search across the topic" />
+          <LegendItem keys="/" description="Filter across the topic" />
           <LegendItem
             keys="Ctrl + +/-"
             description="Adjust the editor font size"
@@ -5517,6 +5787,279 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
         )
       : moveableFolders),
   ];
+  const isTopicFilterActive = topicFilterQuery.trim().length > 0;
+  const visibleConceptEntries = topic.concepts
+    .map((concept, cIdx) => ({ concept, cIdx }))
+    .filter(
+      ({ concept }) =>
+        !isTopicFilterActive ||
+        topicConceptMatchesFilter(concept, topicFilterQuery),
+    );
+  const getFontSizeSliderConfig = (setting: SizeSetting) =>
+    setting.unit === "%"
+      ? {
+          min: MIN_FONT_SIZE_PERCENT,
+          max: MAX_FONT_SIZE_PERCENT,
+          step: FONT_SIZE_PERCENT_STEP,
+        }
+      : {
+          min: MIN_FONT_SIZE_PX,
+          max: MAX_FONT_SIZE_PX,
+          step: FONT_SIZE_PX_STEP,
+        };
+  const conceptFontSizeSlider = getFontSizeSliderConfig(conceptFontSize);
+  const derivativeFontSizeSlider = getFontSizeSliderConfig(derivativeFontSize);
+  const blockWidthSlider =
+    editorBlockWidth.unit === "%"
+      ? {
+          min: MIN_EDITOR_BLOCK_WIDTH_PERCENT,
+          max: MAX_EDITOR_BLOCK_WIDTH_PERCENT,
+          step: EDITOR_BLOCK_WIDTH_PERCENT_STEP,
+        }
+      : {
+          min: MIN_EDITOR_BLOCK_WIDTH,
+          max: MAX_EDITOR_BLOCK_WIDTH,
+          step: EDITOR_BLOCK_WIDTH_STEP,
+        };
+  const renderSizeUnitControl = (
+    activeUnit: SizeUnit,
+    onChange: (unit: SizeUnit) => void,
+    testIdPrefix: string,
+    label: string,
+  ) => (
+    <div
+      className="inline-flex h-9 shrink-0 overflow-hidden rounded-lg border border-[#283049] bg-[#0d1320]"
+      role="group"
+      aria-label={label}
+    >
+      {(["px", "%"] as SizeUnit[]).map((unit) => {
+        const isActive = activeUnit === unit;
+        return (
+          <button
+            key={unit}
+            type="button"
+            className={`min-w-10 px-3 text-sm font-bold transition ${
+              isActive
+                ? "bg-[#5b79d6]/25 text-[#c0caf5]"
+                : "text-[#7f8bb4] hover:bg-[#2a3350]/35 hover:text-[#cbd3f2]"
+            }`}
+            onClick={() => onChange(unit)}
+            aria-pressed={isActive}
+            data-testid={`${testIdPrefix}-${unit === "%" ? "percent" : "px"}`}
+          >
+            {unit}
+          </button>
+        );
+      })}
+    </div>
+  );
+  const renderSizeEditingControls = () => (
+    <div className="grid gap-4 lg:grid-cols-3">
+      <div className="space-y-2 rounded-lg border border-[#22283a] bg-[#101521] p-3">
+        <div className="flex items-center justify-between text-sm">
+          <span className="font-bold text-[#cbd3f2]">Concept font size</span>
+          <span className="text-[#9bb2ff]">
+            {formatSizeSetting(conceptFontSize)}
+          </span>
+        </div>
+        <div className="flex items-center gap-3">
+          <button
+            type="button"
+            className="h-9 w-9 rounded-lg border border-[#2a3350] text-lg font-bold text-[#9bb2ff] transition hover:bg-[#2a3350]/30"
+            onClick={() =>
+              setConceptFontSize((prev) =>
+                adjustFontSizeSetting(prev, CONCEPT_FONT_BASE_PX, -1),
+              )
+            }
+            aria-label="Decrease concept font size"
+          >
+            -
+          </button>
+          <input
+            type="range"
+            min={conceptFontSizeSlider.min}
+            max={conceptFontSizeSlider.max}
+            step={conceptFontSizeSlider.step}
+            value={conceptFontSize.value}
+            onChange={(e) =>
+              updateConceptFontSize({
+                value: Number(e.target.value),
+                unit: conceptFontSize.unit,
+              })
+            }
+            className="w-full accent-[#7aa2f7]"
+            data-testid="editor-font-size-slider"
+          />
+          <button
+            type="button"
+            className="h-9 w-9 rounded-lg border border-[#2a3350] text-lg font-bold text-[#9bb2ff] transition hover:bg-[#2a3350]/30"
+            onClick={() =>
+              setConceptFontSize((prev) =>
+                adjustFontSizeSetting(prev, CONCEPT_FONT_BASE_PX, 1),
+              )
+            }
+            aria-label="Increase concept font size"
+          >
+            +
+          </button>
+        </div>
+        <div className="flex items-center gap-3">
+          <input
+            type="text"
+            value={conceptFontSizeDraft}
+            onChange={(e) => setConceptFontSizeDraft(e.target.value)}
+            onBlur={commitConceptFontSizeDraft}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                e.currentTarget.blur();
+              }
+            }}
+            className="w-28 rounded-lg border border-[#283049] bg-[#0d1320] px-3 py-2 text-sm text-[#cbd3f2] outline-none transition focus:border-[#5b79d6]/70"
+            inputMode="decimal"
+            data-testid="editor-font-size-input"
+          />
+          {renderSizeUnitControl(
+            conceptFontSize.unit,
+            (unit) =>
+              setConceptFontSize((prev) =>
+                convertFontSizeSettingUnit(prev, CONCEPT_FONT_BASE_PX, unit),
+              ),
+            "editor-font-size-unit",
+            "Concept font size unit",
+          )}
+        </div>
+      </div>
+
+      <div className="space-y-2 rounded-lg border border-[#22283a] bg-[#101521] p-3">
+        <div className="flex items-center justify-between text-sm">
+          <span className="font-bold text-[#cbd3f2]">Derivative font size</span>
+          <span className="text-[#9bb2ff]">
+            {formatSizeSetting(derivativeFontSize)}
+          </span>
+        </div>
+        <div className="flex items-center gap-3">
+          <button
+            type="button"
+            className="h-9 w-9 rounded-lg border border-[#2a3350] text-lg font-bold text-[#9bb2ff] transition hover:bg-[#2a3350]/30"
+            onClick={() =>
+              setDerivativeFontSize((prev) =>
+                adjustFontSizeSetting(prev, DERIVATIVE_FONT_BASE_PX, -1),
+              )
+            }
+            aria-label="Decrease derivative font size"
+          >
+            -
+          </button>
+          <input
+            type="range"
+            min={derivativeFontSizeSlider.min}
+            max={derivativeFontSizeSlider.max}
+            step={derivativeFontSizeSlider.step}
+            value={derivativeFontSize.value}
+            onChange={(e) =>
+              updateDerivativeFontSize({
+                value: Number(e.target.value),
+                unit: derivativeFontSize.unit,
+              })
+            }
+            className="w-full accent-[#7aa2f7]"
+            data-testid="editor-derivative-font-size-slider"
+          />
+          <button
+            type="button"
+            className="h-9 w-9 rounded-lg border border-[#2a3350] text-lg font-bold text-[#9bb2ff] transition hover:bg-[#2a3350]/30"
+            onClick={() =>
+              setDerivativeFontSize((prev) =>
+                adjustFontSizeSetting(prev, DERIVATIVE_FONT_BASE_PX, 1),
+              )
+            }
+            aria-label="Increase derivative font size"
+          >
+            +
+          </button>
+        </div>
+        <div className="flex items-center gap-3">
+          <input
+            type="text"
+            value={derivativeFontSizeDraft}
+            onChange={(e) => setDerivativeFontSizeDraft(e.target.value)}
+            onBlur={commitDerivativeFontSizeDraft}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                e.currentTarget.blur();
+              }
+            }}
+            className="w-28 rounded-lg border border-[#283049] bg-[#0d1320] px-3 py-2 text-sm text-[#cbd3f2] outline-none transition focus:border-[#5b79d6]/70"
+            inputMode="decimal"
+            data-testid="editor-derivative-font-size-input"
+          />
+          {renderSizeUnitControl(
+            derivativeFontSize.unit,
+            (unit) =>
+              setDerivativeFontSize((prev) =>
+                convertFontSizeSettingUnit(
+                  prev,
+                  DERIVATIVE_FONT_BASE_PX,
+                  unit,
+                ),
+              ),
+            "editor-derivative-font-size-unit",
+            "Derivative font size unit",
+          )}
+        </div>
+      </div>
+
+      <div className="space-y-2 rounded-lg border border-[#22283a] bg-[#101521] p-3">
+        <div className="flex items-center justify-between text-sm">
+          <span className="font-bold text-[#cbd3f2]">Block width</span>
+          <span className="text-[#9bb2ff]">{editorBlockWidthCss}</span>
+        </div>
+        <input
+          type="range"
+          min={blockWidthSlider.min}
+          max={blockWidthSlider.max}
+          step={blockWidthSlider.step}
+          value={editorBlockWidth.value}
+          onChange={(e) =>
+            updateEditorBlockWidth({
+              value: Number(e.target.value),
+              unit: editorBlockWidth.unit,
+            })
+          }
+          className="w-full accent-[#7aa2f7]"
+          data-testid="editor-block-width-slider"
+        />
+        <div className="flex items-center gap-3">
+          <input
+            type="text"
+            value={editorBlockWidthDraft}
+            onChange={(e) => setEditorBlockWidthDraft(e.target.value)}
+            onBlur={commitEditorBlockWidthDraft}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                e.currentTarget.blur();
+              }
+            }}
+            className="w-32 rounded-lg border border-[#283049] bg-[#0d1320] px-3 py-2 text-sm text-[#cbd3f2] outline-none transition focus:border-[#5b79d6]/70"
+            inputMode="decimal"
+            data-testid="editor-block-width-input"
+          />
+          {renderSizeUnitControl(
+            editorBlockWidth.unit,
+            (unit) =>
+              setEditorBlockWidth((prev) =>
+                convertEditorBlockWidthUnit(prev, unit),
+              ),
+            "editor-block-width-unit",
+            "Block width unit",
+          )}
+        </div>
+      </div>
+    </div>
+  );
 
   return (
     <div className="relative isolate flex flex-col h-screen overflow-hidden bg-[#0d111b] font-sans">
@@ -5611,10 +6154,18 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
       >
         <div
           className="mx-auto w-full pb-20 space-y-6"
-          style={{ maxWidth: `${editorBlockWidth}px` }}
+          style={{ maxWidth: editorBlockWidthCss }}
           data-testid="editor-blocks-container"
         >
-          {topic.concepts.map((concept, cIdx) => {
+          {visibleConceptEntries.length === 0 && (
+            <div
+              className="rounded border border-dashed border-[#2a3350] bg-[#141821]/80 p-6 text-center text-sm font-semibold text-[#7f8bb4]"
+              data-testid="topic-filter-empty"
+            >
+              No matching topics.
+            </div>
+          )}
+          {visibleConceptEntries.map(({ concept, cIdx }) => {
             const isConceptActive = cursorIdx === cIdx && derivIdx === -1;
             const isConceptContextActive = cursorIdx === cIdx;
             const hasSelectedDerivativeInConcept = concept.derivatives.some(
@@ -5940,16 +6491,20 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
         </div>
       </div>
 
-      {isSearching && (
-        <div className="absolute bottom-10 left-0 right-0 p-4 bg-[#16161e] border-t border-b border-[#7aa2f7] z-50 flex items-center gap-2 shadow-2xl">
+      {(isTopicFilterEditing || topicFilterQuery) && (
+        <div
+          className="absolute bottom-10 left-0 right-0 z-50 flex items-center gap-2 border-t border-b border-[#7aa2f7] bg-[#16161e] p-4 shadow-2xl"
+          data-testid="topic-filter"
+        >
           <span className="text-[#9ece6a] font-bold">/</span>
-          <input
-            autoFocus
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            className="bg-transparent outline-none text-[#c0caf5] w-full mono"
-            placeholder="Search..."
-          />
+          <span className="mono min-h-[1.25rem] flex-1 text-[#c0caf5]">
+            {topicFilterQuery || (
+              <span className="text-[#565f89]">type to filter topic</span>
+            )}
+          </span>
+          <span className="text-[10px] font-bold uppercase tracking-[0.14em] text-[#7f8bb4]">
+            Enter return · / reset
+          </span>
         </div>
       )}
 
@@ -6132,205 +6687,30 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
                             </div>
                           </div>
                           <div className="text-sm text-[#7f8bb4]">
-                            {editorFontPercent}% · {editorBlockWidth}px
+                            {formatSizeSetting(conceptFontSize)} /{" "}
+                            {formatSizeSetting(derivativeFontSize)} ·{" "}
+                            {editorBlockWidthCss}
                           </div>
                         </div>
 
-                        <div className="mt-4 space-y-4">
-                          <div className="space-y-2">
-                            <div className="flex items-center justify-between text-sm">
-                              <span className="font-bold text-[#cbd3f2]">
-                                Editor font size
-                              </span>
-                              <span className="text-[#9bb2ff]">
-                                {editorFontPercent}%
-                              </span>
-                            </div>
-                            <div className="flex items-center gap-3">
-                              <button
-                                type="button"
-                                className="h-9 w-9 rounded-lg border border-[#2a3350] text-lg font-bold text-[#9bb2ff] transition hover:bg-[#2a3350]/30"
-                                onClick={() =>
-                                  adjustEditorFontScale(
-                                    -EDITOR_FONT_SCALE_STEP,
-                                  )
-                                }
-                                aria-label="Decrease editor font size"
-                              >
-                                -
-                              </button>
-                              <input
-                                type="range"
-                                min={MIN_EDITOR_FONT_SCALE * 100}
-                                max={MAX_EDITOR_FONT_SCALE * 100}
-                                step={EDITOR_FONT_SCALE_STEP * 100}
-                                value={editorFontPercent}
-                                onChange={(e) =>
-                                  updateEditorFontScale(
-                                    Number(e.target.value) / 100,
-                                  )
-                                }
-                                className="w-full accent-[#7aa2f7]"
-                                data-testid="editor-font-size-slider"
-                              />
-                              <button
-                                type="button"
-                                className="h-9 w-9 rounded-lg border border-[#2a3350] text-lg font-bold text-[#9bb2ff] transition hover:bg-[#2a3350]/30"
-                                onClick={() =>
-                                  adjustEditorFontScale(
-                                    EDITOR_FONT_SCALE_STEP,
-                                  )
-                                }
-                                aria-label="Increase editor font size"
-                              >
-                                +
-                              </button>
-                            </div>
-                            <div className="flex items-center gap-3">
-                              <input
-                                type="number"
-                                min={MIN_EDITOR_FONT_SCALE * 100}
-                                max={MAX_EDITOR_FONT_SCALE * 100}
-                                step={EDITOR_FONT_SCALE_STEP * 100}
-                                value={editorFontPercentDraft}
-                                onChange={(e) =>
-                                  setEditorFontPercentDraft(e.target.value)
-                                }
-                                onBlur={commitEditorFontScaleDraft}
-                                onKeyDown={(e) => {
-                                  if (e.key === "Enter") {
-                                    e.preventDefault();
-                                    e.currentTarget.blur();
-                                  }
-                                }}
-                                className="w-28 rounded-lg border border-[#283049] bg-[#0d1320] px-3 py-2 text-sm text-[#cbd3f2] outline-none transition focus:border-[#5b79d6]/70"
-                                inputMode="numeric"
-                                data-testid="editor-font-size-input"
-                              />
-                              <span className="text-sm text-[#94a0c6]">
-                                % in 5% increments
-                              </span>
-                            </div>
-                            <div className="text-sm text-[#94a0c6]">
-                              Shortcut: Ctrl/Cmd + plus or minus. Range: 50% to
-                              300%.
-                            </div>
+                        <div className="mt-4 flex items-center justify-between gap-4 rounded-lg border border-[#22283a] bg-[#0d1320] p-3">
+                          <div className="text-sm text-[#94a0c6]">
+                            Open a focused preview surface to tune sizes with
+                            live sample content.
                           </div>
-
-                          <div className="space-y-2">
-                            <div className="flex items-center justify-between text-sm">
-                              <span className="font-bold text-[#cbd3f2]">
-                                Block width
-                              </span>
-                              <span className="text-[#9bb2ff]">
-                                {editorBlockWidth}px
-                              </span>
-                            </div>
-                            <input
-                              type="range"
-                              min={MIN_EDITOR_BLOCK_WIDTH}
-                              max={MAX_EDITOR_BLOCK_WIDTH}
-                              step={EDITOR_BLOCK_WIDTH_STEP}
-                              value={editorBlockWidth}
-                              onChange={(e) =>
-                                updateEditorBlockWidth(e.target.value)
-                              }
-                              className="w-full accent-[#7aa2f7]"
-                              data-testid="editor-block-width-slider"
-                            />
-                            <div className="flex items-center gap-3">
-                              <input
-                                type="number"
-                                min={MIN_EDITOR_BLOCK_WIDTH}
-                                max={MAX_EDITOR_BLOCK_WIDTH}
-                                step={1}
-                                value={editorBlockWidthDraft}
-                                onChange={(e) =>
-                                  setEditorBlockWidthDraft(e.target.value)
-                                }
-                                onBlur={commitEditorBlockWidthDraft}
-                                onKeyDown={(e) => {
-                                  if (e.key === "Enter") {
-                                    e.preventDefault();
-                                    e.currentTarget.blur();
-                                  }
-                                }}
-                                className="w-32 rounded-lg border border-[#283049] bg-[#0d1320] px-3 py-2 text-sm text-[#cbd3f2] outline-none transition focus:border-[#5b79d6]/70"
-                                inputMode="numeric"
-                                data-testid="editor-block-width-input"
-                              />
-                              <span className="text-sm text-[#94a0c6]">
-                                px, up to 3840
-                              </span>
-                            </div>
-                            <div className="text-sm text-[#94a0c6]">
-                              Wider layouts leave more room for long concepts and nested derivatives.
-                            </div>
-                          </div>
-
-                          <div className="rounded-xl border border-[#22283a] bg-[#0d1320] p-3">
-                            <div className="flex items-center justify-between gap-3">
-                              <div className="text-sm font-bold text-[#cbd3f2]">
-                                Live preview
-                              </div>
-                              <div className="text-sm text-[#7f8bb4]">
-                                Scroll horizontally for wider layouts.
-                              </div>
-                            </div>
-                            <div
-                              className="mt-3 overflow-x-auto pb-2"
-                              data-testid="editor-layout-preview-scroll"
-                            >
-                              <div
-                                className="space-y-3"
-                                style={{ width: `${editorBlockWidth}px` }}
-                                data-testid="editor-layout-preview"
-                              >
-                                <div className="rounded-xl border border-[#7aa2f7]/25 bg-[#24283b] p-4 shadow-[0_0_20px_rgba(122,162,247,0.08)]">
-                                  <div className="flex gap-4">
-                                    <span className="mono mt-1.5 text-xs text-[#565f89] opacity-50">
-                                      01
-                                    </span>
-                                    <div
-                                      className="flex-1 font-mono text-[#c0caf5]"
-                                      style={conceptTypographyStyle}
-                                    >
-                                      Fourier transforms turn dense signals into readable frequency domains.
-                                    </div>
-                                  </div>
-                                  <div className="ml-10 mt-4 space-y-3 border-l border-[#565f89]/30 pl-4">
-                                    <div className="rounded-lg border border-[#ff9e64]/30 bg-[#ff9e64]/10 p-3">
-                                      <div className="flex items-start gap-3">
-                                        <span className="mt-0.5 rounded bg-[#ff9e64]/20 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider text-[#ff9e64]">
-                                          ?
-                                        </span>
-                                        <div
-                                          className="flex-1 font-mono text-[#a9b1d6]"
-                                          style={derivativeTypographyStyle}
-                                        >
-                                          What changes when the sample window narrows?
-                                        </div>
-                                      </div>
-                                    </div>
-                                    <div className="rounded-lg border border-[#7dcfff]/30 bg-[#7dcfff]/10 p-3">
-                                      <div className="flex items-start gap-3">
-                                        <span className="mt-0.5 rounded bg-[#7dcfff]/20 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider text-[#7dcfff]">
-                                          E
-                                        </span>
-                                        <div
-                                          className="flex-1 font-mono text-[#a9b1d6]"
-                                          style={derivativeTypographyStyle}
-                                        >
-                                          Narrow windows improve time localization, but they smear nearby frequencies together.
-                                        </div>
-                                      </div>
-                                    </div>
-                                  </div>
-                                </div>
-                              </div>
-                            </div>
-                          </div>
+                          <button
+                            type="button"
+                            className="shrink-0 rounded border border-[#7aa2f7]/40 px-3 py-2 text-sm font-bold text-[#9bb2ff] transition hover:bg-[#5b79d6]/15"
+                            onClick={() => {
+                              setIsAccountOpen(false);
+                              setIsSizeEditorOpen(true);
+                            }}
+                            data-testid="open-size-editor"
+                          >
+                            EDIT SIZES
+                          </button>
                         </div>
+
                       </div>
 
                       <div className="rounded-xl border border-[#22283a] bg-[#101521]/80 p-3">
@@ -6453,6 +6833,130 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
         </div>
       )}
 
+      {isSizeEditorOpen && (
+        <div
+          className="fixed inset-0 z-[60] overflow-y-auto bg-[#0d111b]"
+          data-testid="size-editor"
+        >
+          <div className="sticky top-0 z-20 flex items-center justify-between border-b border-[#22283a] bg-[#111622]/95 px-5 py-4 backdrop-blur">
+            <div>
+              <div className="text-sm font-bold tracking-[0.2em] text-[#cbd3f2]">
+                EDIT SIZES
+              </div>
+              <div className="text-sm text-[#94a0c6]">
+                Concept {formatSizeSetting(conceptFontSize)} · Derivative{" "}
+                {formatSizeSetting(derivativeFontSize)} · Width{" "}
+                {editorBlockWidthCss}
+              </div>
+            </div>
+            <button
+              type="button"
+              className="rounded border border-[#2a3350] px-3 py-2 text-sm font-bold text-[#9bb2ff] transition hover:bg-[#2a3350]/30"
+              onClick={() => setIsSizeEditorOpen(false)}
+              data-testid="close-size-editor"
+            >
+              DONE
+            </button>
+          </div>
+
+          <div className="px-6 pb-64 pt-8">
+            <div
+              className="mx-auto w-full space-y-6"
+              style={{ maxWidth: editorBlockWidthCss }}
+              data-testid="size-editor-sample"
+            >
+              <div className="rounded border border-[#283049] bg-[#141821] p-5 shadow-[0_20px_60px_rgba(0,0,0,0.24)]">
+                <div className="mb-4 flex items-center justify-between gap-4">
+                  <div className="text-xs font-bold uppercase tracking-[0.18em] text-[#7aa2f7]">
+                    Sample note
+                  </div>
+                  <div className="text-xs text-[#7f8bb4]">
+                    {editorBlockWidthCss}
+                  </div>
+                </div>
+                <div className="flex gap-4">
+                  <span className="mono mt-1.5 text-xs text-[#565f89] opacity-60">
+                    01
+                  </span>
+                  <div
+                    className="flex-1 whitespace-pre-wrap break-words font-mono text-[#c0caf5]"
+                    style={conceptTypographyStyle}
+                    data-testid="size-editor-concept-sample"
+                  >
+                    Learning is easier when the page width keeps each idea
+                    readable without forcing too many line breaks.
+                  </div>
+                </div>
+                <div className="ml-10 mt-4 space-y-3 border-l border-[#565f89]/30 pl-4">
+                  <div className="rounded border border-[#ff9e64]/30 bg-[#ff9e64]/10 p-3">
+                    <div className="flex items-start gap-3">
+                      <span className="mt-0.5 rounded bg-[#ff9e64]/20 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider text-[#ff9e64]">
+                        ?
+                      </span>
+                      <div
+                        className="flex-1 whitespace-pre-wrap break-words font-mono text-[#a9b1d6]"
+                        style={derivativeTypographyStyle}
+                        data-testid="size-editor-derivative-sample"
+                      >
+                        What font size makes this prompt quick to scan?
+                      </div>
+                    </div>
+                  </div>
+                  <div className="rounded border border-[#7dcfff]/30 bg-[#7dcfff]/10 p-3">
+                    <div className="flex items-start gap-3">
+                      <span className="mt-0.5 rounded bg-[#7dcfff]/20 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider text-[#7dcfff]">
+                        E
+                      </span>
+                      <div
+                        className="flex-1 whitespace-pre-wrap break-words font-mono text-[#a9b1d6]"
+                        style={derivativeTypographyStyle}
+                      >
+                        A comfortable derivative size should feel quieter than
+                        the concept while still being legible during review.
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="rounded border border-[#283049] bg-[#141821] p-5">
+                <div className="flex gap-4">
+                  <span className="mono mt-1.5 text-xs text-[#565f89] opacity-60">
+                    02
+                  </span>
+                  <div
+                    className="flex-1 whitespace-pre-wrap break-words font-mono text-[#c0caf5]"
+                    style={conceptTypographyStyle}
+                  >
+                    Short notes, dense notes, and multi-line notes should all
+                    keep a steady rhythm at the chosen width.
+                  </div>
+                </div>
+                <div className="ml-10 mt-4 rounded border border-[#bb9af7]/30 bg-[#bb9af7]/10 p-3">
+                  <div className="flex items-start gap-3">
+                    <span className="mt-0.5 rounded bg-[#bb9af7]/20 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider text-[#bb9af7]">
+                      C
+                    </span>
+                    <div
+                      className="flex-1 whitespace-pre-wrap break-words font-mono text-[#a9b1d6]"
+                      style={derivativeTypographyStyle}
+                    >
+                      The same settings apply immediately to the workspace.
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div className="fixed inset-x-0 bottom-0 z-30 border-t border-[#22283a] bg-[#111622]/95 p-4 shadow-[0_-20px_60px_rgba(0,0,0,0.35)] backdrop-blur">
+            <div className="mx-auto w-full max-w-6xl">
+              {renderSizeEditingControls()}
+            </div>
+          </div>
+        </div>
+      )}
+
       {isDocumentSwitcherOpen && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-[#0b0e17]/80"
@@ -6525,10 +7029,9 @@ const App = ({ guestMode = false }: { guestMode?: boolean }) => {
                   <div className="text-sm font-bold text-[#cbd3f2]">
                     Current note
                   </div>
-                  <div className="mt-1 text-sm text-[#7aa2f7]">
-                    {topic.path}
+                  <div className="mt-1 text-sm text-[#7aa2f7]" data-testid="current-note-path">
+                    {getTopicFullPath(topic)}
                   </div>
-                  <div className="text-base text-[#94a0c6]">{topic.title}</div>
                 </div>
                 <div className="flex items-center gap-2">
                   <button

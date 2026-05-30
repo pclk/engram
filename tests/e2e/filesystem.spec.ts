@@ -1,5 +1,12 @@
 import { test, expect } from './fixtures/test';
 
+test('shows the current note filename on the filesystem path line', async ({ guestPage }) => {
+  await guestPage.goto();
+  await guestPage.openTopicSwitcher();
+
+  await expect(guestPage.topicSwitcher.getByTestId('current-note-path')).toHaveText('/Untitled Topic');
+});
+
 test('can create nested folders and a note from the selected folder', async ({ guestPage, page }) => {
   await guestPage.goto();
   await guestPage.openTopicSwitcher();

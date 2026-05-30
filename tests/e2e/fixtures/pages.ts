@@ -50,6 +50,9 @@ export class GuestPage {
   async createTopicWithKeyboard(title: string) {
     await this.openTopicSwitcher();
     await this.page.keyboard.press('o');
+    const activeNameInput = this.topicSwitcher.locator('input[data-testid^="topic-name-input-"]');
+    await expect(activeNameInput).toBeVisible();
+    await expect(activeNameInput).toBeFocused();
     await this.page.keyboard.type(title);
     await this.page.keyboard.press('Escape');
     await this.page.keyboard.press('Enter');

@@ -1,0 +1,5 @@
+enable the following keys:
+shift+Y to copy entire line (same as yy)
+shift+D to delete entire line (same as dd)
+shift+C to change entire line (same as cc)
+shift+V to select entire line.
